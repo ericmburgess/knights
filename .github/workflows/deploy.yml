@@ -36,8 +36,6 @@ jobs:
       - name: Configure Pages
         id: pages
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       # Pages serves under /<repo>/, so asset URLs must be prefixed to match.
       - name: Build with trunk
