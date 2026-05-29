@@ -16,7 +16,7 @@ use knights_core::spiral::{Direction, Handedness};
 use std::collections::BTreeSet;
 
 /// Half-width of the offset editor grid (covers leapers reaching up to 4 squares).
-const GRID_R: i32 = 4;
+const GRID_R: i32 = 5;
 
 /// Native entry: opens a window.
 #[cfg(not(target_arch = "wasm32"))]
@@ -78,10 +78,11 @@ struct KnightsApp {
 impl KnightsApp {
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         // Open on the canonical red/black setup so there's something to Simulate.
-        let knight: BTreeSet<(i32, i32)> =
-            [(1, 2), (2, 1), (2, -1), (1, -2), (-1, -2), (-2, -1), (-2, 1), (-1, 2)]
-                .into_iter()
-                .collect();
+        let knight = library_types()
+            .into_iter()
+            .find(|(name, _)| *name == "knight")
+            .map(|(_, offsets)| offsets)
+            .expect("library has a knight");
         Self {
             types: vec![PieceTypeEdit { name: "knight".to_owned(), offsets: knight }],
             pieces: vec![
@@ -192,7 +193,7 @@ impl KnightsApp {
     /// A grid centered on the piece (gray center cell); click to toggle attacked squares.
     fn offset_grid(ui: &mut egui::Ui, offsets: &mut BTreeSet<(i32, i32)>) {
         let cells = (2 * GRID_R + 1) as f32;
-        let side = 170.0;
+        let side = cells * 16.0;
         let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
         let painter = ui.painter_at(rect);
         let cs = side / cells;
@@ -245,10 +246,20 @@ impl KnightsApp {
                 ui.small(format!("{} attacked squares", t.offsets.len()));
             });
         }
-        if ui.button("+ piece type").clicked() {
-            let name = format!("type{}", self.types.len() + 1);
-            self.types.push(PieceTypeEdit { name, offsets: BTreeSet::new() });
-        }
+        ui.horizontal(|ui| {
+            if ui.button("+ blank type").clicked() {
+                let name = format!("type{}", self.types.len() + 1);
+                self.types.push(PieceTypeEdit { name, offsets: BTreeSet::new() });
+            }
+            ui.menu_button("+ from library", |ui| {
+                for (name, offsets) in library_types() {
+                    if ui.button(name).clicked() {
+                        self.types.push(PieceTypeEdit { name: name.to_owned(), offsets });
+                        ui.close_menu();
+                    }
+                }
+            });
+        });
         if let Some(i) = remove_type {
             if self.types.len() > 1 {
                 self.types.remove(i);
@@ -412,6 +423,14 @@ impl eframe::App for KnightsApp {
 
         egui::CentralPanel::default().show(ctx, |ui| self.board_view(ui));
     }
+}
+
+/// The built-in fairy-piece library, as editable piece types.
+fn library_types() -> Vec<(&'static str, BTreeSet<(i32, i32)>)> {
+    knights_core::piece::library()
+        .into_iter()
+        .map(|(name, offsets)| (name, offsets.into_iter().collect()))
+        .collect()
 }
 
 fn dir_name(d: Direction) -> &'static str {
