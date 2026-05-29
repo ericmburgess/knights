@@ -339,10 +339,13 @@ impl KnightsApp {
     }
 
     fn board_view(&mut self, ui: &mut egui::Ui) {
+        // Use the theme's canvas color so the board panel follows dark/light mode.
+        let bg = ui.visuals().extreme_bg_color;
+        let hint = ui.visuals().weak_text_color();
         let (rect, response) =
             ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, egui::Color32::from_gray(247));
+        painter.rect_filled(rect, 0.0, bg);
 
         let Some(tex) = &self.board else {
             painter.text(
@@ -350,7 +353,7 @@ impl KnightsApp {
                 egui::Align2::CENTER_CENTER,
                 "Press Simulate",
                 egui::FontId::proportional(18.0),
-                egui::Color32::GRAY,
+                hint,
             );
             return;
         };
