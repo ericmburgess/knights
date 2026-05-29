@@ -263,7 +263,17 @@ impl KnightsApp {
         }
 
         ui.separator();
-        ui.heading("Pieces (turn order)");
+        ui.horizontal(|ui| {
+            ui.heading("Pieces (turn order)");
+            ui.label(egui::RichText::new("(i)").color(egui::Color32::from_rgb(90, 140, 220)))
+                .on_hover_text(
+                    "Each piece scans its own square spiral.\n\
+                     - direction: the first arm's heading (right/up/left/down).\n\
+                     - orientation: turn sense as it grows. ccw cycles right, up, left, down; \
+                     cw cycles right, down, left, up.\n\
+                     Pieces play in list order; the first seeds the center.",
+                );
+        });
         let type_names: Vec<String> = self.types.iter().map(|t| t.name.clone()).collect();
         let mut remove_piece: Option<usize> = None;
         let mut move_up: Option<usize> = None;
@@ -273,7 +283,9 @@ impl KnightsApp {
                 ui.horizontal(|ui| {
                     ui.color_edit_button_srgb(&mut p.color);
                     ui.text_edit_singleline(&mut p.label);
-                    if i > 0 && ui.button("↑").clicked() {
+                    if i > 0
+                        && ui.button("⬆").on_hover_text("Move up (earlier in turn order)").clicked()
+                    {
                         move_up = Some(i);
                     }
                     if count > 1 && ui.button("🗑").clicked() {
