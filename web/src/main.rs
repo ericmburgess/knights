@@ -269,7 +269,7 @@ impl KnightsApp {
                     ui.selectable_value(&mut self.selected_type, i, label);
                 }
             });
-            ui.separator();
+            ui.add_space(12.0);
             // Right: detail (name + grid) for the selected type.
             ui.vertical(|ui| {
                 let i = self.selected_type.min(self.types.len() - 1);
