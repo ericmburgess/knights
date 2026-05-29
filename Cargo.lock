@@ -980,6 +980,7 @@ name = "knights-web"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "js-sys",
  "knights-core",
  "log",
  "wasm-bindgen-futures",

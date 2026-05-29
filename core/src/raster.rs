@@ -69,21 +69,35 @@ pub fn write_indexed(path: &str, img: &IndexedImage) -> io::Result<()> {
     w.flush()
 }
 
+/// Encode any [`Board`] to PNG bytes at `scale` px/cell. Buffers the whole file in
+/// memory — fine for interactive/export sizes; the CLI's huge renders stream instead
+/// via [`write_board_png`].
+pub fn board_png_bytes(board: &dyn Board, scale: u32) -> Vec<u8> {
+    let mut buf = Vec::new();
+    encode_board(&mut buf, board, scale).expect("writing to a Vec is infallible");
+    buf
+}
+
 /// Write any [`Board`] straight from its occupancy grid at `scale` px/cell, streaming
 /// one scanline at a time (no intermediate image buffer).
 pub fn write_board_png(path: &str, board: &dyn Board, scale: u32) -> io::Result<()> {
+    let mut w = BufWriter::new(File::create(path)?);
+    encode_board(&mut w, board, scale)?;
+    w.flush()
+}
+
+/// Shared body: encode `board` as a `scale`-px/cell indexed PNG into `w`.
+fn encode_board<W: Write>(w: &mut W, board: &dyn Board, scale: u32) -> io::Result<()> {
     let palette = board.palette();
     let r = board.radius();
     let dim = (2 * r + 1) as u32 * scale;
-    let mut w = BufWriter::new(File::create(path)?);
-    encode(&mut w, dim, dim, &palette, |oy, out| {
+    encode(w, dim, dim, &palette, |oy, out| {
         let world_y = r - (oy / scale) as i32; // image y points down; flip
         for ox in 0..dim {
             let world_x = (ox / scale) as i32 - r;
             out.push(board.cell(world_x, world_y)); // byte == palette index
         }
-    })?;
-    w.flush()
+    })
 }
 
 /// Write Red & Black (or Quad) — a thin alias over [`write_board_png`].
