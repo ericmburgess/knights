@@ -20,7 +20,7 @@ mod spiral;
 
 use courteous::simulate_courteous;
 use knight::simulate_trapped_knight;
-use redblack::simulate_redblack;
+use redblack::{simulate_redblack, Variant};
 use std::time::Instant;
 
 const USAGE: &str = "\
@@ -29,7 +29,7 @@ Knight problems on a numbered square spiral.
 Usage:
   knights [trapped]   [--start <n>] [--canvas <px>] [--out <path>]
   knights  courteous  [--radius <r>] [--format svg|png] [--canvas <px>] [--squaresize <px>] [--out <path>]
-  knights  redblack   [--radius <r>] [--format svg|png] [--canvas <px>] [--squaresize <px>] [--out <path>]
+  knights  redblack   [--radius <r>] [--variant canonical|rot180|mirror] [--format svg|png] [--canvas <px>] [--squaresize <px>] [--out <path>]
 
 Subcommands:
   trapped     One knight hops to the lowest-numbered unvisited square until
@@ -41,6 +41,11 @@ Subcommands:
 
 Options:
   --start <n>        Number of the center square (default 1).
+  --variant <v>      Red/black only: canonical (default; reproduces OEIS
+                     A392177/A392178), rot180 (Red's spiral rotated 180°), or
+                     mirror (Red's spiral reflected across the y-axis: left, up,
+                     right, down). rot180/mirror mitigate Black's first-mover bias
+                     and are non-canonical.
   --radius <r>       Half-width of the region in cells (default 30; 80 for redblack).
   --format <f>       Output format: svg or png (default svg, or inferred from --out).
                      PNG is indexed-color, for the board problems, and scales to
@@ -103,6 +108,7 @@ fn main() {
     let mut squaresize: u32 = 1;
     let mut out: Option<String> = None;
     let mut format: Option<Format> = None;
+    let mut variant = Variant::Canonical;
     while i < args.len() {
         match args[i].as_str() {
             "--start" => {
@@ -140,6 +146,18 @@ fn main() {
                     _ => fail(&format!("invalid --format: {v} (expected svg or png)")),
                 });
             }
+            "--variant" => {
+                i += 1;
+                let v = args.get(i).unwrap_or_else(|| fail("--variant needs a value"));
+                variant = match v.as_str() {
+                    "canonical" => Variant::Canonical,
+                    "rot180" => Variant::Rot180,
+                    "mirror" => Variant::Mirror,
+                    _ => fail(&format!(
+                        "invalid --variant: {v} (expected canonical, rot180, or mirror)"
+                    )),
+                };
+            }
             "--out" => {
                 i += 1;
                 out = Some(args.get(i).unwrap_or_else(|| fail("--out needs a value")).clone());
@@ -159,10 +177,21 @@ fn main() {
         Some(p) if p.to_ascii_lowercase().ends_with(".png") => Format::Png,
         _ => Format::Svg,
     });
+    // --variant only affects the two-color game; reject it elsewhere rather than
+    // silently ignoring it.
+    if !matches!(problem, Problem::RedBlack) && !matches!(variant, Variant::Canonical) {
+        fail("--variant is only valid for the redblack subcommand");
+    }
     let base = match &problem {
         Problem::Trapped => "trapped_knight",
         Problem::Courteous => "courteous_knights",
-        Problem::RedBlack => "red_black_knights",
+        // Distinct default name per variant so the experiments never clobber the
+        // canonical render (or each other).
+        Problem::RedBlack => match variant {
+            Variant::Canonical => "red_black_knights",
+            Variant::Rot180 => "red_black_knights_rot180",
+            Variant::Mirror => "red_black_knights_mirror",
+        },
     };
     let out = out.unwrap_or_else(|| format!("out/{base}.{}", format.ext()));
 
@@ -223,7 +252,7 @@ fn main() {
         }
         Problem::RedBlack => {
             let t = Instant::now();
-            let result = simulate_redblack(radius);
+            let result = simulate_redblack(radius, variant);
             let sim = t.elapsed();
             let placed = result.black + result.red;
             let empty = result.squares_considered as usize - placed;
@@ -231,6 +260,12 @@ fn main() {
                 "Placed {} knights ({} Black, {} Red) among the first {} squares (radius {}); \
                  {} left empty.",
                 placed, result.black, result.red, result.squares_considered, result.radius, empty
+            );
+            println!(
+                "Variant: {} — symmetry: rotate-180+swap {:.1}%, mirror-Y+swap {:.1}%.",
+                variant.name(),
+                result.rot_swap_symmetry() * 100.0,
+                result.mirror_swap_symmetry() * 100.0
             );
             let t = Instant::now();
             let kind = match format {

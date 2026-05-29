@@ -29,7 +29,9 @@ Each file's module doc-comment explains its design — start there.
 
 Flags: `--radius <r>`, `--start <n>`, `--format svg|png` (PNG is board-problems only),
 `--canvas <px>` (SVG size, default 1600), `--squaresize <px>` (PNG pixels/square, default 1),
-`--out <path>`. See `cargo run -- --help`.
+`--variant canonical|rot180|mirror` (redblack only; `rot180`/`mirror` are non-canonical
+experiments that reorient Red's spiral — see `redblack.rs`), `--out <path>`.
+See `cargo run -- --help`.
 
 ## Verification oracles (enforced by tests — trust these, not prose)
 
