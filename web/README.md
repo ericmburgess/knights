@@ -5,10 +5,11 @@ browser. (Also runs as a native window via `cargo run -p knights-web`.)
 
 A visual editor for arbitrary placement games:
 
-- **Piece types** — each a name and an 11×11 click-grid where you toggle the squares it
-  attacks (center = the piece). Start from a blank grid, or **+ from library** to insert
-  a named fairy leaper (wazir, ferz, dabbaba, knight, elephant, dromedary, zebra,
-  antelope).
+- **Piece types** — a list of every defined type beside an 11×11 grid; select one to
+  see/edit the squares it attacks (center = the piece). The standard fairy leapers
+  (wazir, ferz, dabbaba, knight, elephant, dromedary, zebra, antelope) are always
+  present and read-only; use **New** for a blank type or **Copy** to make an editable
+  duplicate of the selected one.
 - **Pieces** (turn order) — each picks a type, a color, a spiral (direction +
   ccw/cw), and a label; add / remove / reorder them.
 - **Simulate** builds an `EngineConfig` from the editor and runs `knights_core`.
