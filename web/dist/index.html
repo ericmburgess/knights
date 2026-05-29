@@ -18,14 +18,14 @@
         display: block;
       }
     </style>
-  <link rel="modulepreload" href="/knights-web-b98122cc814531a4.js" crossorigin="anonymous" integrity="sha384-YeiR9/Yfn45696AdDayo0Z0JSHDzXq3YXLBHHdmUwoZyU+JxxAylA6x1KR7WFo3F"><link rel="preload" href="/knights-web-b98122cc814531a4_bg.wasm" crossorigin="anonymous" integrity="sha384-bxf5++UYfcGUCxIC/Xb2lXleA9RN9tum4XG1ZvO3t6TybVVzk0Gql0wHgR7F+Ks8" as="fetch" type="application/wasm"></head>
+  <link rel="modulepreload" href="/knights-web-eafcdf6b200645fc.js" crossorigin="anonymous" integrity="sha384-hHaGMyPzVC5fwopjrwbDCmYGCY/DxIkipeqr8o3VZ8mLfV9jyLdj43CyMFH+km2n"><link rel="preload" href="/knights-web-eafcdf6b200645fc_bg.wasm" crossorigin="anonymous" integrity="sha384-Mkk2YWm8+xuc515kkd6uAOhp5PoAb/9ab7CRm52uaOtL2sINw5WTfTbEb8c2WUnk" as="fetch" type="application/wasm"></head>
   <body>
     <canvas id="the_canvas_id"></canvas>
     <!-- Trunk finds the crate via this link and injects the wasm/JS loader. -->
     
 <script type="module">
-import init, * as bindings from '/knights-web-b98122cc814531a4.js';
-const wasm = await init({ module_or_path: '/knights-web-b98122cc814531a4_bg.wasm' });
+import init, * as bindings from '/knights-web-eafcdf6b200645fc.js';
+const wasm = await init({ module_or_path: '/knights-web-eafcdf6b200645fc_bg.wasm' });
 
 
 window.wasmBindings = bindings;

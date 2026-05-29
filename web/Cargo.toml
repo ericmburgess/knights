@@ -11,6 +11,8 @@ path = "src/main.rs"
 knights-core = { path = "../core" }
 eframe = { version = "0.29", default-features = false, features = ["glow", "default_fonts"] }
 log = "0.4"
+# Cross-platform Instant (performance.now() on wasm, std on native) for timing.
+web-time = "1"
 
 # Web-only: starting eframe on a canvas and triggering a PNG download need these.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

@@ -14,9 +14,22 @@ use knights_core::piece::KindBuilder;
 use knights_core::raster;
 use knights_core::spiral::{Direction, Handedness};
 use std::collections::BTreeSet;
+use web_time::Instant;
+
+/// Colors auto-assigned to pieces as they're added, cycled in order.
+const AUTO_COLORS: [[u8; 3]; 8] = [
+    [26, 26, 26],   // black
+    [209, 31, 31],  // red
+    [38, 160, 65],  // green
+    [242, 201, 33], // yellow
+    [40, 103, 222], // blue
+    [35, 178, 196], // cyan
+    [190, 55, 170], // magenta
+    [237, 139, 32], // orange
+];
 
 /// Half-width of the offset editor grid (covers leapers reaching up to 4 squares).
-const GRID_R: i32 = 4;
+const GRID_R: i32 = 5;
 
 /// Native entry: opens a window.
 #[cfg(not(target_arch = "wasm32"))]
@@ -48,10 +61,12 @@ fn main() {
     });
 }
 
-/// A piece type being edited: a name and the set of squares it attacks.
+/// A piece type being edited: a name and the set of squares it attacks. Built-in
+/// (library) types are read-only — duplicate one with "Copy" to customize it.
 struct PieceTypeEdit {
     name: String,
     offsets: BTreeSet<(i32, i32)>,
+    builtin: bool,
 }
 
 /// A piece being edited: which type, its color, spiral, and legend label.
@@ -65,6 +80,8 @@ struct PieceEdit {
 
 struct KnightsApp {
     types: Vec<PieceTypeEdit>,
+    /// Index into `types` whose grid is shown/edited in the Piece types detail pane.
+    selected_type: usize,
     pieces: Vec<PieceEdit>,
     radius: i32,
     export_scale: u32,
@@ -77,18 +94,21 @@ struct KnightsApp {
 
 impl KnightsApp {
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        // Open on the canonical red/black setup so there's something to Simulate.
-        let knight: BTreeSet<(i32, i32)> =
-            [(1, 2), (2, 1), (2, -1), (1, -2), (-1, -2), (-2, -1), (-2, 1), (-1, 2)]
-                .into_iter()
-                .collect();
+        // The built-in fairy pieces are always present (read-only).
+        let types: Vec<PieceTypeEdit> = library_types()
+            .into_iter()
+            .map(|(name, offsets)| PieceTypeEdit { name: name.to_owned(), offsets, builtin: true })
+            .collect();
+        // Open on the canonical red/black setup: both reference the built-in knight.
+        let knight = types.iter().position(|t| t.name == "knight").unwrap_or(0);
         Self {
-            types: vec![PieceTypeEdit { name: "knight".to_owned(), offsets: knight }],
+            selected_type: knight,
+            types,
             pieces: vec![
-                PieceEdit { type_idx: 0, color: [26, 26, 26], direction: Direction::Right, handed: Handedness::Ccw, label: "Black".to_owned() },
-                PieceEdit { type_idx: 0, color: [209, 31, 31], direction: Direction::Right, handed: Handedness::Ccw, label: "Red".to_owned() },
+                PieceEdit { type_idx: knight, color: AUTO_COLORS[0], direction: Direction::Right, handed: Handedness::Ccw, label: "Black".to_owned() },
+                PieceEdit { type_idx: knight, color: AUTO_COLORS[1], direction: Direction::Right, handed: Handedness::Ccw, label: "Red".to_owned() },
             ],
-            radius: 80,
+            radius: 400,
             export_scale: 4,
             board: None,
             status: "Edit pieces, then press Simulate.".to_owned(),
@@ -129,7 +149,9 @@ impl KnightsApp {
                 return;
             }
         };
+        let t = Instant::now();
         let result = engine::simulate(self.radius, cfg);
+        let elapsed = t.elapsed();
         let palette = result.palette();
         let n = (2 * self.radius + 1) as usize;
         let mut pixels = Vec::with_capacity(n * n);
@@ -141,6 +163,7 @@ impl KnightsApp {
         }
         let image = egui::ColorImage { size: [n, n], pixels };
         self.board = Some(ctx.load_texture("board", image, egui::TextureOptions::NEAREST));
+        self.pan = egui::Vec2::ZERO; // recenter the fresh board (zoom is left as-is)
 
         let breakdown = result
             .legend()
@@ -150,11 +173,12 @@ impl KnightsApp {
             .join(", ");
         let placed: u64 = result.legend().iter().map(|row| row.count).sum();
         self.status = format!(
-            "radius {}: {} placed ({}), {} empty.",
+            "radius {}: {} placed ({}), {} empty. Simulated in {:.1?}.",
             result.radius,
             placed,
             breakdown,
-            result.squares_considered - placed
+            result.squares_considered - placed,
+            elapsed
         );
     }
 
@@ -189,13 +213,21 @@ impl KnightsApp {
         };
     }
 
-    /// A grid centered on the piece (gray center cell); click to toggle attacked squares.
-    fn offset_grid(ui: &mut egui::Ui, offsets: &mut BTreeSet<(i32, i32)>) {
+    /// A grid centered on the piece (gray center cell), one cell per relative square.
+    /// When `editable`, clicking toggles the attacked square under the cursor; otherwise
+    /// it's display-only (built-in types) and drawn in a muted tone.
+    fn offset_grid(ui: &mut egui::Ui, offsets: &mut BTreeSet<(i32, i32)>, editable: bool) {
         let cells = (2 * GRID_R + 1) as f32;
-        let side = 170.0;
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
+        let side = cells * 16.0;
+        let sense = if editable { egui::Sense::click() } else { egui::Sense::hover() };
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side), sense);
         let painter = ui.painter_at(rect);
         let cs = side / cells;
+        let on = if editable {
+            egui::Color32::from_rgb(70, 130, 220)
+        } else {
+            egui::Color32::from_rgb(70, 95, 140)
+        };
         for gy in -GRID_R..=GRID_R {
             for gx in -GRID_R..=GRID_R {
                 let col = (gx + GRID_R) as f32;
@@ -207,14 +239,14 @@ impl KnightsApp {
                 let fill = if gx == 0 && gy == 0 {
                     egui::Color32::from_gray(110)
                 } else if offsets.contains(&(gx, gy)) {
-                    egui::Color32::from_rgb(70, 130, 220)
+                    on
                 } else {
                     egui::Color32::from_gray(40)
                 };
                 painter.rect_filled(cell.shrink(1.0), 2.0, fill);
             }
         }
-        if response.clicked() {
+        if editable && response.clicked() {
             if let Some(pos) = response.interact_pointer_pos() {
                 let local = pos - rect.min;
                 let gx = (local.x / cs).floor() as i32 - GRID_R;
@@ -230,34 +262,65 @@ impl KnightsApp {
 
     fn editor_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading("Piece types");
+        ui.horizontal(|ui| {
+            if ui.button("New").on_hover_text("Create a blank editable type").clicked() {
+                let n = self.types.iter().filter(|t| !t.builtin).count() + 1;
+                self.types.push(PieceTypeEdit { name: format!("custom {n}"), offsets: BTreeSet::new(), builtin: false });
+                self.selected_type = self.types.len() - 1;
+            }
+            if ui.button("Copy").on_hover_text("Duplicate the selected type as an editable copy").clicked() {
+                let src = &self.types[self.selected_type];
+                let name = format!("{} copy", src.name);
+                let offsets = src.offsets.clone();
+                self.types.push(PieceTypeEdit { name, offsets, builtin: false });
+                self.selected_type = self.types.len() - 1;
+            }
+        });
+
         let mut remove_type: Option<usize> = None;
-        let type_count = self.types.len();
-        for (i, t) in self.types.iter_mut().enumerate() {
-            ui.group(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label("name");
-                    ui.text_edit_singleline(&mut t.name);
-                    if type_count > 1 && ui.button("🗑").clicked() {
-                        remove_type = Some(i);
-                    }
-                });
-                Self::offset_grid(ui, &mut t.offsets);
-                ui.small(format!("{} attacked squares", t.offsets.len()));
+        ui.horizontal_top(|ui| {
+            // Left: the list of every defined type; select one to edit it on the right.
+            ui.vertical(|ui| {
+                for (i, t) in self.types.iter().enumerate() {
+                    let label = if t.builtin { format!("🔒 {}", t.name) } else { t.name.clone() };
+                    ui.selectable_value(&mut self.selected_type, i, label);
+                }
             });
-        }
-        if ui.button("+ piece type").clicked() {
-            let name = format!("type{}", self.types.len() + 1);
-            self.types.push(PieceTypeEdit { name, offsets: BTreeSet::new() });
-        }
+            ui.add_space(12.0);
+            // Right: detail (name + grid) for the selected type.
+            ui.vertical(|ui| {
+                let i = self.selected_type.min(self.types.len() - 1);
+                self.selected_type = i;
+                let t = &mut self.types[i];
+                if t.builtin {
+                    ui.horizontal(|ui| {
+                        ui.strong(&t.name);
+                        ui.label(egui::RichText::new("🔒 built-in").weak());
+                    });
+                    ui.small("Read-only — press Copy to make an editable version.");
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label("name");
+                        ui.text_edit_singleline(&mut t.name);
+                    });
+                }
+                Self::offset_grid(ui, &mut t.offsets, !t.builtin);
+                ui.small(format!("{} attacked squares", t.offsets.len()));
+                if !t.builtin && ui.button("🗑 delete").clicked() {
+                    remove_type = Some(i);
+                }
+            });
+        });
         if let Some(i) = remove_type {
-            if self.types.len() > 1 {
-                self.types.remove(i);
-                for p in &mut self.pieces {
-                    if p.type_idx == i {
-                        p.type_idx = 0;
-                    } else if p.type_idx > i {
-                        p.type_idx -= 1;
-                    }
+            self.types.remove(i);
+            if self.selected_type >= i && self.selected_type > 0 {
+                self.selected_type -= 1;
+            }
+            for p in &mut self.pieces {
+                if p.type_idx == i {
+                    p.type_idx = 0;
+                } else if p.type_idx > i {
+                    p.type_idx -= 1;
                 }
             }
         }
@@ -320,8 +383,8 @@ impl KnightsApp {
         ui.horizontal(|ui| {
             if ui.button("+ piece").clicked() {
                 self.pieces.push(PieceEdit {
-                    type_idx: 0,
-                    color: [38, 160, 65],
+                    type_idx: self.selected_type,
+                    color: AUTO_COLORS[self.pieces.len() % AUTO_COLORS.len()],
                     direction: Direction::Right,
                     handed: Handedness::Ccw,
                     label: String::new(),
@@ -388,7 +451,17 @@ impl eframe::App for KnightsApp {
                 ui.heading("knights");
                 ui.separator();
                 ui.label("radius");
-                ui.add(egui::Slider::new(&mut self.radius, 10..=400));
+                for r in [100, 200, 400, 800, 1600] {
+                    if ui.selectable_label(self.radius == r, r.to_string()).clicked() {
+                        self.radius = r;
+                    }
+                }
+                ui.add(
+                    egui::DragValue::new(&mut self.radius)
+                        .speed(5)
+                        .range(10..=2000),
+                )
+                .on_hover_text("Manual radius (board display is capped here; the CLI renders bigger)");
                 if ui.button("Simulate").clicked() {
                     self.simulate(ctx);
                 }
@@ -406,12 +479,20 @@ impl eframe::App for KnightsApp {
             ui.label(&self.status);
         });
 
-        egui::SidePanel::left("editor").resizable(true).default_width(290.0).show(ctx, |ui| {
+        egui::SidePanel::left("editor").resizable(true).default_width(430.0).show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| self.editor_panel(ui));
         });
 
         egui::CentralPanel::default().show(ctx, |ui| self.board_view(ui));
     }
+}
+
+/// The built-in fairy-piece library, as editable piece types.
+fn library_types() -> Vec<(&'static str, BTreeSet<(i32, i32)>)> {
+    knights_core::piece::library()
+        .into_iter()
+        .map(|(name, offsets)| (name, offsets.into_iter().collect()))
+        .collect()
 }
 
 fn dir_name(d: Direction) -> &'static str {

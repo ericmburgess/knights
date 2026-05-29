@@ -151,6 +151,37 @@ impl KindBuilder {
     }
 }
 
+/// All squares an `(a, b)` *leaper* attacks: every `(±a, ±b)` and `(±b, ±a)`, deduped.
+/// (For `a == b` or a zero component this collapses to 4 squares.)
+pub fn leaper(a: i32, b: i32) -> Vec<(i32, i32)> {
+    let mut set = std::collections::BTreeSet::new();
+    for (p, q) in [(a, b), (b, a)] {
+        for sx in [1, -1] {
+            for sy in [1, -1] {
+                set.insert((p * sx, q * sy));
+            }
+        }
+    }
+    set.into_iter().collect()
+}
+
+/// Built-in fairy-chess leapers as `(name, attack offsets)`, for the editor's piece
+/// library and for reference. These are the standard problemist leapers named by their
+/// `(a, b)` jump vector; see the module/CLI docs. The widest, the antelope `(3,4)`,
+/// reaches 4 squares, so an editor grid radius of at least 4 is needed to draw it.
+pub fn library() -> Vec<(&'static str, Vec<(i32, i32)>)> {
+    vec![
+        ("wazir", leaper(0, 1)),     // one orthogonal
+        ("ferz", leaper(1, 1)),      // one diagonal
+        ("dabbaba", leaper(0, 2)),   // two orthogonal
+        ("knight", leaper(1, 2)),    // the classic (2,1)
+        ("elephant", leaper(2, 2)),  // two diagonal (the shatranj alfil)
+        ("dromedary", leaper(0, 3)), // three orthogonal
+        ("zebra", leaper(2, 3)),     // (3,2)
+        ("antelope", leaper(3, 4)),  // (4,3)
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,5 +225,31 @@ mod tests {
             assert!(b.intern(vec![(1, 2)], color, "p").is_some(), "kind {i} should fit");
         }
         assert_eq!(b.intern(vec![(1, 2)], (1, 1, 1), "overflow"), None);
+    }
+
+    #[test]
+    fn library_pieces_have_expected_geometry() {
+        let lib = library();
+        let get = |name: &str| lib.iter().find(|(n, _)| *n == name).expect("present").1.clone();
+
+        // Diagonal/orthogonal short leapers attack 4 squares; (a,b) with a!=b,>0 attack 8.
+        assert_eq!(get("wazir"), vec![(-1, 0), (0, -1), (0, 1), (1, 0)]);
+        assert_eq!(get("ferz"), vec![(-1, -1), (-1, 1), (1, -1), (1, 1)]);
+        assert_eq!(get("elephant"), vec![(-2, -2), (-2, 2), (2, -2), (2, 2)]);
+        assert_eq!(get("dromedary"), vec![(-3, 0), (0, -3), (0, 3), (3, 0)]);
+        assert_eq!(get("knight").len(), 8);
+        assert_eq!(get("zebra").len(), 8);
+        assert_eq!(get("antelope").len(), 8);
+
+        // The library knight matches the shared KNIGHT_OFFSETS set.
+        let mut k = get("knight");
+        k.sort_unstable();
+        let mut ko = crate::knight::KNIGHT_OFFSETS.to_vec();
+        ko.sort_unstable();
+        assert_eq!(k, ko);
+
+        // The antelope reaches 4, so the editor grid radius must be >= 4.
+        let reach = |o: &[(i32, i32)]| o.iter().map(|&(x, y)| x.abs().max(y.abs())).max().unwrap();
+        assert_eq!(reach(&get("antelope")), 4);
     }
 }
