@@ -1,0 +1,36 @@
+name: CI
+
+# Build + test on every PR (and on main) so branches are verified before merge.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust (with wasm target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      # `cargo test` covers the default members (core + cli) — the lean native crates
+      # with all the tests; it does not pull in the web crate's heavy eframe tree.
+      - name: Test core + cli
+        run: cargo test
+
+      # The web crate's real target is WASM; check it there (no native GL libs needed).
+      - name: Check web (wasm)
+        run: cargo check -p knights-web --target wasm32-unknown-unknown
