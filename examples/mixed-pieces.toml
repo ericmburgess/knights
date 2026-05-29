@@ -1,0 +1,28 @@
+# A heterogeneous game the built-in presets can't express: two *different* piece
+# types, on two different spiral orientations. Knights (black) sweep out from the
+# center counterclockwise; camels (a (3,1)-leaper, red) sweep the opposite way.
+#
+# Attack offsets are arbitrary finite lists, so they need not be symmetric — a square
+# is attacked by a piece iff (square - piece) is in that piece's own offset list.
+
+[[piece_type]]
+name = "knight"
+offsets = [[1, 2], [2, 1], [2, -1], [1, -2], [-1, -2], [-2, -1], [-2, 1], [-1, 2]]
+
+[[piece_type]]
+name = "camel"
+offsets = [[1, 3], [3, 1], [3, -1], [1, -3], [-1, -3], [-3, -1], [-3, 1], [-1, 3]]
+
+[[piece]]
+type = "knight"
+color = "#1a1a1a"
+direction = "right"
+orientation = "ccw"
+label = "Knights"
+
+[[piece]]
+type = "camel"
+color = "#d11f1f"
+direction = "left"
+orientation = "ccw"
+label = "Camels"

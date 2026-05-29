@@ -1,0 +1,25 @@
+# Canonical Red & Black Knights, expressed as a custom config.
+# Equivalent to `knights redblack --variant canonical` (reproduces OEIS A392177/A392178).
+#
+# A piece type is a finite list of [dx, dy] squares it attacks. Pieces take turns in
+# listed order (the first seeds the center); each places on the lowest square of its
+# spiral not attacked by a different color. A spiral is (direction, orientation):
+# direction in right|up|left|down, orientation in ccw|cw.
+
+[[piece_type]]
+name = "knight"
+offsets = [[1, 2], [2, 1], [2, -1], [1, -2], [-1, -2], [-2, -1], [-2, 1], [-1, 2]]
+
+[[piece]]
+type = "knight"
+color = "#1a1a1a"
+direction = "right"
+orientation = "ccw"
+label = "Black"
+
+[[piece]]
+type = "knight"
+color = "#d11f1f"
+direction = "right"
+orientation = "ccw"
+label = "Red"

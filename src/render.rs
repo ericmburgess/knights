@@ -6,8 +6,10 @@
 //! rather than just enlarging a fixed layout.
 
 use crate::courteous::CourteousResult;
+use crate::engine::Board;
 use crate::knight::SimResult;
-use crate::redblack::{self, RedBlackResult};
+use crate::piece::EMPTY;
+use crate::redblack::RedBlackResult;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -149,10 +151,11 @@ pub fn render_courteous_svg(result: &CourteousResult, canvas: f64) -> String {
     svg
 }
 
-/// Render the placement game (two- or four-color): each placed knight as a
-/// near-solid cell in its team color, so territory reads as solid blocks.
-pub fn render_redblack_svg(result: &RedBlackResult, canvas: f64) -> String {
-    let r = result.radius;
+/// Render any [`Board`] (a placement game of any number of colors): each placed piece
+/// as a near-solid cell in its color, so territory reads as solid blocks, with one
+/// legend row per team in turn order.
+pub fn render_board_svg(board: &dyn Board, title: &str, canvas: f64) -> String {
+    let r = board.radius();
     let margin = margin_for(canvas);
     let ui = ui_scale(canvas);
     let vp = Viewport::from_bounds(canvas, margin, -r, r, -r, r);
@@ -160,15 +163,17 @@ pub fn render_redblack_svg(result: &RedBlackResult, canvas: f64) -> String {
     let size_px = (cell * 0.92).max(1.0);
     let rx = size_px * 0.15;
 
-    // Hex color per occupant code (index = code), so more piece types just grow
-    // the palette without touching this loop.
-    let hexes: Vec<String> = result.palette().iter().map(|&c| rgb_hex(c)).collect();
+    // Hex color per cell byte (index = byte), so more piece types just grow the
+    // palette without touching this loop.
+    let hexes: Vec<String> = board.palette().iter().map(|&c| rgb_hex(c)).collect();
+    let legend_rows = board.legend();
+    let placed: u64 = legend_rows.iter().map(|row| row.count).sum();
 
-    let mut svg = svg_open(result.placed() as usize * 96 + 1024, canvas);
+    let mut svg = svg_open(placed as usize * 96 + 1024, canvas);
     for y in -r..=r {
         for x in -r..=r {
-            let code = result.cell(x, y);
-            if code == redblack::EMPTY {
+            let code = board.cell(x, y);
+            if code == EMPTY {
                 continue;
             }
             let (px, py) = vp.to_px(x, y);
@@ -176,24 +181,25 @@ pub fn render_redblack_svg(result: &RedBlackResult, canvas: f64) -> String {
         }
     }
 
-    // One legend row per team, in turn order.
-    let rows: Vec<(&str, String)> = result
-        .teams()
+    let rows: Vec<(&str, String)> = legend_rows
         .iter()
-        .map(|&code| {
-            let label = format!("{}: {}", redblack::color_name(code), result.count(code));
-            (hexes[code as usize].as_str(), label)
-        })
+        .map(|row| (hexes[row.slot as usize].as_str(), format!("{}: {}", row.label, row.count)))
         .collect();
+    legend(&mut svg, margin, ui, title, &rows);
+
+    svg.push_str("</svg>\n");
+    svg
+}
+
+/// Render Red & Black (or Quad): pick the title by team count, then defer to
+/// [`render_board_svg`].
+pub fn render_redblack_svg(result: &RedBlackResult, canvas: f64) -> String {
     let title = if result.teams().len() > 2 {
         "Four-Color Knights"
     } else {
         "Red & Black Knights"
     };
-    legend(&mut svg, margin, ui, title, &rows);
-
-    svg.push_str("</svg>\n");
-    svg
+    render_board_svg(result, title, canvas)
 }
 
 /// Format an RGB triple as an SVG hex color.

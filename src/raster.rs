@@ -9,6 +9,7 @@
 //! occupancy grid with no intermediate copy.
 
 use crate::courteous::CourteousResult;
+use crate::engine::Board;
 use crate::redblack::RedBlackResult;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -68,21 +69,26 @@ pub fn write_indexed(path: &str, img: &IndexedImage) -> io::Result<()> {
     w.flush()
 }
 
-/// Write Red & Black Knights straight from its occupancy grid at `scale` px/cell,
-/// streaming one scanline at a time (no intermediate image buffer).
-pub fn write_redblack_png(path: &str, result: &RedBlackResult, scale: u32) -> io::Result<()> {
-    let palette = result.palette();
-    let r = result.radius;
+/// Write any [`Board`] straight from its occupancy grid at `scale` px/cell, streaming
+/// one scanline at a time (no intermediate image buffer).
+pub fn write_board_png(path: &str, board: &dyn Board, scale: u32) -> io::Result<()> {
+    let palette = board.palette();
+    let r = board.radius();
     let dim = (2 * r + 1) as u32 * scale;
     let mut w = BufWriter::new(File::create(path)?);
     encode(&mut w, dim, dim, &palette, |oy, out| {
         let world_y = r - (oy / scale) as i32; // image y points down; flip
         for ox in 0..dim {
             let world_x = (ox / scale) as i32 - r;
-            out.push(result.cell(world_x, world_y)); // code == palette index
+            out.push(board.cell(world_x, world_y)); // byte == palette index
         }
     })?;
     w.flush()
+}
+
+/// Write Red & Black (or Quad) — a thin alias over [`write_board_png`].
+pub fn write_redblack_png(path: &str, result: &RedBlackResult, scale: u32) -> io::Result<()> {
+    write_board_png(path, result, scale)
 }
 
 const SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];

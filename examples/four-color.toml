@@ -1,0 +1,35 @@
+# Four-color knights, equivalent to `knights redblack --variant quad`.
+# Four teams on the same spiral, taking turns in listed order; each avoids squares
+# attacked by any other color.
+
+[[piece_type]]
+name = "knight"
+offsets = [[1, 2], [2, 1], [2, -1], [1, -2], [-1, -2], [-2, -1], [-2, 1], [-1, 2]]
+
+[[piece]]
+type = "knight"
+color = "#1a1a1a"
+direction = "right"
+orientation = "ccw"
+label = "Black"
+
+[[piece]]
+type = "knight"
+color = "#d11f1f"
+direction = "right"
+orientation = "ccw"
+label = "Red"
+
+[[piece]]
+type = "knight"
+color = "#26a041"
+direction = "right"
+orientation = "ccw"
+label = "Green"
+
+[[piece]]
+type = "knight"
+color = "#f2c921"
+direction = "right"
+orientation = "ccw"
+label = "Yellow"

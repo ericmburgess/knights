@@ -7,18 +7,24 @@
 //!              earlier knight; renders the resulting clusters.
 //!   redblack   Problem 3 — two teams alternate placing knights; renders the
 //!              territories that emerge.
+//!   custom     Arbitrary placement game from a TOML config (any pieces, spirals,
+//!              and colors) — the general engine the other placement games are presets of.
 //!
 //! The board problems can render to SVG (default) or, for huge radii, to an
 //! indexed PNG (`--format png`).
 
+mod config;
 mod courteous;
+mod engine;
 mod knight;
+mod piece;
 mod raster;
 mod redblack;
 mod render;
 mod spiral;
 
 use courteous::simulate_courteous;
+use engine::Board;
 use knight::simulate_trapped_knight;
 use redblack::{simulate_redblack, Variant};
 use std::time::Instant;
@@ -30,6 +36,7 @@ Usage:
   knights [trapped]   [--start <n>] [--canvas <px>] [--out <path>]
   knights  courteous  [--radius <r>] [--format svg|png] [--canvas <px>] [--squaresize <px>] [--out <path>]
   knights  redblack   [--radius <r>] [--variant canonical|rot180|mirror|quad] [--format svg|png] [--canvas <px>] [--squaresize <px>] [--out <path>]
+  knights  custom     --config <path> [--radius <r>] [--format svg|png] [--canvas <px>] [--squaresize <px>] [--out <path>]
 
 Subcommands:
   trapped     One knight hops to the lowest-numbered unvisited square until
@@ -38,9 +45,13 @@ Subcommands:
               scanning the spiral over a square region of the given radius.
   redblack    Two teams alternate (Black first), each placing on the lowest
               square not attacked by the other color, over the given radius.
+  custom      Run an arbitrary placement game from a TOML config: any number of
+              pieces, each with its own attack offsets, spiral, and color.
 
 Options:
   --start <n>        Number of the center square (default 1).
+  --config <path>    TOML config for the custom subcommand (required there). Defines
+                     piece types (attack offsets) and pieces (type, color, spiral).
   --variant <v>      Red/black only: canonical (default; reproduces OEIS
                      A392177/A392178), rot180 (Red's spiral rotated 180°), mirror
                      (Red's spiral reflected across the y-axis: left, up, right,
@@ -59,6 +70,7 @@ enum Problem {
     Trapped,
     Courteous,
     RedBlack,
+    Custom,
 }
 
 enum Format {
@@ -90,6 +102,7 @@ fn main() {
         Some("trapped") => (Problem::Trapped, 2),
         Some("courteous") => (Problem::Courteous, 2),
         Some("redblack") => (Problem::RedBlack, 2),
+        Some("custom") => (Problem::Custom, 2),
         Some("-h") | Some("--help") => {
             println!("{USAGE}");
             return;
@@ -101,7 +114,7 @@ fn main() {
 
     let mut start: u64 = 1;
     let mut radius: i32 = match &problem {
-        Problem::RedBlack => 80,
+        Problem::RedBlack | Problem::Custom => 80,
         _ => 30,
     };
     let mut canvas: f64 = 1600.0;
@@ -109,6 +122,7 @@ fn main() {
     let mut out: Option<String> = None;
     let mut format: Option<Format> = None;
     let mut variant = Variant::Canonical;
+    let mut config_path: Option<String> = None;
     while i < args.len() {
         match args[i].as_str() {
             "--start" => {
@@ -159,6 +173,10 @@ fn main() {
                     )),
                 };
             }
+            "--config" => {
+                i += 1;
+                config_path = Some(args.get(i).unwrap_or_else(|| fail("--config needs a value")).clone());
+            }
             "--out" => {
                 i += 1;
                 out = Some(args.get(i).unwrap_or_else(|| fail("--out needs a value")).clone());
@@ -183,6 +201,13 @@ fn main() {
     if !matches!(problem, Problem::RedBlack) && !matches!(variant, Variant::Canonical) {
         fail("--variant is only valid for the redblack subcommand");
     }
+    // --config is required by, and only valid for, the custom subcommand.
+    if matches!(problem, Problem::Custom) && config_path.is_none() {
+        fail("the custom subcommand requires --config <path>");
+    }
+    if !matches!(problem, Problem::Custom) && config_path.is_some() {
+        fail("--config is only valid for the custom subcommand");
+    }
     let base = match &problem {
         Problem::Trapped => "trapped_knight",
         Problem::Courteous => "courteous_knights",
@@ -194,6 +219,7 @@ fn main() {
             Variant::Mirror => "red_black_knights_mirror",
             Variant::Quad => "red_black_knights_quad",
         },
+        Problem::Custom => "custom",
     };
     let out = out.unwrap_or_else(|| format!("out/{base}.{}", format.ext()));
 
@@ -289,6 +315,40 @@ fn main() {
                 }
                 Format::Png => {
                     write_or_fail(raster::write_redblack_png(&out, &result, squaresize), &out);
+                    "PNG"
+                }
+            };
+            (kind, sim, t.elapsed())
+        }
+        Problem::Custom => {
+            let path = config_path.as_deref().expect("validated present above");
+            let cfg = config::load(path).unwrap_or_else(|e| fail(&format!("config error: {e}")));
+            let t = Instant::now();
+            let result = engine::simulate(radius, cfg);
+            let sim = t.elapsed();
+
+            let legend = result.legend();
+            let placed: u64 = legend.iter().map(|row| row.count).sum();
+            let total = result.squares_considered;
+            let breakdown = legend
+                .iter()
+                .map(|row| format!("{} {}", row.count, row.label))
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!(
+                "Placed {} pieces ({}) among the first {} squares (radius {}); {} left empty.",
+                placed, breakdown, total, result.radius, total - placed
+            );
+
+            let t = Instant::now();
+            let kind = match format {
+                Format::Svg => {
+                    let svg = render::render_board_svg(&result, "Custom Placement", canvas);
+                    write_or_fail(render::write_svg(&svg, &out), &out);
+                    "SVG"
+                }
+                Format::Png => {
+                    write_or_fail(raster::write_board_png(&out, &result, squaresize), &out);
                     "PNG"
                 }
             };

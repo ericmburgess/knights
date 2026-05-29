@@ -3,5 +3,6 @@ name = "knights"
 version = "0.1.0"
 edition = "2021"
 
-# Milestone 1: zero external dependencies — std only.
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
