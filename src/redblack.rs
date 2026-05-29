@@ -42,55 +42,92 @@
 //! gap, which is exactly the first-mover asymmetry the spiral can't remove. These are
 //! experiments, not the Numberphile problem: only [`Variant::Canonical`] reproduces
 //! A392177/A392178.
+//!
+//! A separate axis is the *number* of teams. [`Variant::Quad`] keeps every spiral in
+//! the standard orientation but plays four colors — Black, Red, Green, Yellow — in
+//! round-robin, each avoiding squares attacked by *any other* color (same color still
+//! cooperates). The engine is written team-generic: any number of cursors take turns,
+//! so the two-color and four-color games share one loop. The cursor-never-rewinds
+//! argument is unchanged — a square still leaves a team's candidate set only by being
+//! occupied or attacked by another color, both permanent.
 
 use crate::knight::KNIGHT_OFFSETS;
 use crate::spiral::SpiralWalker;
 
 /// Occupant codes; also the palette indices used when rendering. Extend with more
-/// piece types as needed (up to 256 — the cell is a full byte).
+/// piece types as needed (up to 256 — the cell is a full byte). The two-color game
+/// uses only BLACK/RED; [`Variant::Quad`] adds GREEN/YELLOW.
 pub const EMPTY: u8 = 0;
 pub const BLACK: u8 = 1;
 pub const RED: u8 = 2;
+pub const GREEN: u8 = 3;
+pub const YELLOW: u8 = 4;
 
-/// RGB for each occupant code, indexed by the code itself.
+/// RGB for every occupant code, indexed by the code itself. A result exposes just
+/// the prefix its teams use via [`RedBlackResult::palette`], so two-color renders
+/// still index a 3-entry palette (and keep their compact PNG bit depth).
 pub fn palette() -> Vec<(u8, u8, u8)> {
     vec![
-        (255, 255, 255), // EMPTY -> white
-        (26, 26, 26),    // BLACK -> near-black
+        (255, 255, 255), // EMPTY  -> white
+        (26, 26, 26),    // BLACK  -> near-black
         (209, 31, 31),   // RED
+        (38, 160, 65),   // GREEN
+        (242, 201, 33),  // YELLOW
     ]
 }
 
-/// Which spiral each color scans. See the module doc for the rationale.
+/// Human-facing name of a team color, for legends and the CLI summary.
+pub fn color_name(code: u8) -> &'static str {
+    match code {
+        BLACK => "Black",
+        RED => "Red",
+        GREEN => "Green",
+        YELLOW => "Yellow",
+        _ => "Empty",
+    }
+}
+
+/// Which teams play and how each one's spiral is oriented. See the module doc.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Variant {
-    /// Both colors scan the same spiral. The canonical game (OEIS A392177/A392178).
+    /// Black and Red, both scanning the same spiral. The canonical game (A392177/A392178).
     Canonical,
-    /// Red scans the spiral rotated 180° (coordinates negated `(x,y) -> (-x,-y)`)
-    /// to mitigate the first-mover bias. Non-canonical — no OEIS match.
+    /// Black and Red, with Red's spiral rotated 180° (`(x,y) -> (-x,-y)`) to mitigate
+    /// the first-mover bias. Non-canonical — no OEIS match.
     Rot180,
-    /// Red scans the spiral mirrored across the y-axis (`(x,y) -> (-x, y)`), so its
-    /// arms run left, up, right, down. Non-canonical — no OEIS match.
+    /// Black and Red, with Red's spiral mirrored across the y-axis (`(x,y) -> (-x, y)`),
+    /// so its arms run left, up, right, down. Non-canonical — no OEIS match.
     Mirror,
+    /// Four teams — Black, Red, Green, Yellow — all on the same spiral, taking turns in
+    /// that order. Each avoids squares attacked by *any other* color. Non-canonical.
+    Quad,
 }
 
 impl Variant {
-    /// Short flag-facing name (`"canonical"` / `"rot180"` / `"mirror"`).
+    /// Short flag-facing name (`"canonical"` / `"rot180"` / `"mirror"` / `"quad"`).
     pub fn name(self) -> &'static str {
         match self {
             Variant::Canonical => "canonical",
             Variant::Rot180 => "rot180",
             Variant::Mirror => "mirror",
+            Variant::Quad => "quad",
         }
     }
 
-    /// How Red's walker coordinates are transformed under this variant (Black is
-    /// always [`Orient::Same`]).
-    fn red_orient(self) -> Orient {
+    /// The teams that play, as `(occupant code, spiral orientation)` in turn order.
+    /// The single source of truth for who plays and how their spiral is oriented;
+    /// Black always leads on the standard spiral.
+    fn teams(self) -> Vec<(u8, Orient)> {
         match self {
-            Variant::Canonical => Orient::Same,
-            Variant::Rot180 => Orient::Rot180,
-            Variant::Mirror => Orient::MirrorX,
+            Variant::Canonical => vec![(BLACK, Orient::Same), (RED, Orient::Same)],
+            Variant::Rot180 => vec![(BLACK, Orient::Same), (RED, Orient::Rot180)],
+            Variant::Mirror => vec![(BLACK, Orient::Same), (RED, Orient::MirrorX)],
+            Variant::Quad => vec![
+                (BLACK, Orient::Same),
+                (RED, Orient::Same),
+                (GREEN, Orient::Same),
+                (YELLOW, Orient::Same),
+            ],
         }
     }
 }
@@ -125,9 +162,11 @@ pub struct RedBlackResult {
     pub radius: i32,
     /// Number of spiral squares in the rendered window: `(2*radius + 1)^2`.
     pub squares_considered: u64,
-    /// Knights of each color within the rendered window.
-    pub black: usize,
-    pub red: usize,
+    /// Team occupant codes that played, in turn order (e.g. `[BLACK, RED]`).
+    teams: Vec<u8>,
+    /// Knight count per occupant code within the window, indexed by the code
+    /// (so `counts[BLACK]`, …); `counts[EMPTY]` holds the empty-square count.
+    counts: Vec<u64>,
     /// Grid half-width: cells cover `[-half, half]` on both axes.
     half: i32,
     /// Occupant codes, row-major over the `(2*half + 1)`-square.
@@ -135,11 +174,33 @@ pub struct RedBlackResult {
 }
 
 impl RedBlackResult {
-    /// Occupant code at lattice coordinate `(x, y)` (EMPTY / BLACK / RED). Valid
-    /// for `|x|, |y| <= half`, which covers the rendered window and its neighbors.
+    /// Occupant code at lattice coordinate `(x, y)`. Valid for `|x|, |y| <= half`,
+    /// which covers the rendered window and its neighbors.
     pub fn cell(&self, x: i32, y: i32) -> u8 {
         let w = (2 * self.half + 1) as usize;
         self.cells[(y + self.half) as usize * w + (x + self.half) as usize]
+    }
+
+    /// The team codes that played, in turn order.
+    pub fn teams(&self) -> &[u8] {
+        &self.teams
+    }
+
+    /// How many knights of the given occupant code lie within the window.
+    pub fn count(&self, code: u8) -> u64 {
+        self.counts[code as usize]
+    }
+
+    /// Total knights placed within the window (all teams).
+    pub fn placed(&self) -> u64 {
+        self.teams.iter().map(|&c| self.counts[c as usize]).sum()
+    }
+
+    /// Palette covering EMPTY plus exactly the teams that played, indexable by code.
+    /// Two-color variants get a 3-entry palette; [`Variant::Quad`] gets all five.
+    pub fn palette(&self) -> Vec<(u8, u8, u8)> {
+        let max = self.teams.iter().copied().max().unwrap_or(EMPTY) as usize;
+        palette()[..=max].to_vec()
     }
 
     /// Fraction of window cells that equal their 180°-rotated, color-swapped
@@ -184,30 +245,26 @@ fn swap_color(code: u8) -> u8 {
 /// Simulate the game and produce a square window of Chebyshev radius `radius`.
 /// Placement is determined purely by spiral geometry, so there is no numbering
 /// offset — nothing here reports a human-facing square number. `variant` selects
-/// the canonical game or one of the rotated/mirrored-Red experiments.
+/// the canonical game, a rotated/mirrored-Red experiment, or the four-color game.
 pub fn simulate_redblack(radius: i32, variant: Variant) -> RedBlackResult {
     let radius = radius.max(0);
     let (cells, half) = run_with(radius + BUFFER, variant, |_, _| {});
 
-    // Count knights within the rendered window (the buffer rings are excluded).
+    // Tally knights per occupant code within the rendered window (buffer rings excluded).
     let w = (2 * half + 1) as usize;
     let at = |x: i32, y: i32| cells[(y + half) as usize * w + (x + half) as usize];
-    let (mut black, mut red) = (0, 0);
+    let mut counts = vec![0u64; palette().len()];
     for y in -radius..=radius {
         for x in -radius..=radius {
-            match at(x, y) {
-                BLACK => black += 1,
-                RED => red += 1,
-                _ => {}
-            }
+            counts[at(x, y) as usize] += 1;
         }
     }
 
     RedBlackResult {
         radius,
         squares_considered: squares_in_radius(radius),
-        black,
-        red,
+        teams: variant.teams().into_iter().map(|(code, _)| code).collect(),
+        counts,
         half,
         cells,
     }
@@ -219,10 +276,11 @@ fn squares_in_radius(r: i32) -> u64 {
     d * d
 }
 
-/// Run the alternating game over the full square region of radius `sim_radius`,
-/// returning the occupancy grid and its half-width. `variant` selects how Red's
-/// spiral is oriented relative to Black's. `visit(position, code)` is called for
-/// each placement in turn order (a no-op in production; tests use it to recover the
+/// Run the placement game over the full square region of radius `sim_radius`,
+/// returning the occupancy grid and its half-width. `variant` selects the teams and
+/// each team's spiral orientation; they take turns in order (Black first), each
+/// placing on its lowest legal square. `visit(position, code)` is called for each
+/// placement in turn order (a no-op in production; tests use it to recover the
 /// placement sequences). The grid is padded by 2 so the knight neighbors of any
 /// boundary cell are always in bounds (and read as EMPTY).
 fn run_with<F: FnMut(u64, u8)>(sim_radius: i32, variant: Variant, mut visit: F) -> (Vec<u8>, i32) {
@@ -232,48 +290,56 @@ fn run_with<F: FnMut(u64, u8)>(sim_radius: i32, variant: Variant, mut visit: F) 
     let mut grid = vec![EMPTY; w * w];
     let cell = |x: i32, y: i32| -> usize { (y + half) as usize * w + (x + half) as usize };
 
-    let mut walk_black = SpiralWalker::new();
-    let mut walk_red = SpiralWalker::new();
-    let red_orient = variant.red_orient();
-    let mut black_done = false;
-    let mut red_done = false;
+    // One independent, never-rewinding cursor per team.
+    struct Team {
+        code: u8,
+        orient: Orient,
+        walker: SpiralWalker,
+        done: bool,
+    }
+    let mut teams: Vec<Team> = variant
+        .teams()
+        .into_iter()
+        .map(|(code, orient)| Team { code, orient, walker: SpiralWalker::new(), done: false })
+        .collect();
 
-    while !(black_done && red_done) {
-        // Black moves, then Red — alternating, Black first.
-        if !black_done {
-            match next_spot(&mut walk_black, &grid, max_pos, half, w, RED, Orient::Same) {
+    // Round-robin until no team can place. A square seen by a team's cursor is gone
+    // for good (occupied, or attacked by another color — both permanent), so cursors
+    // never rewind and the whole game is O(squares scanned).
+    loop {
+        let mut placed_any = false;
+        for t in &mut teams {
+            if t.done {
+                continue;
+            }
+            match next_spot(&mut t.walker, &grid, max_pos, half, w, t.code, t.orient) {
                 Some((p, x, y)) => {
-                    grid[cell(x, y)] = BLACK;
-                    visit(p, BLACK);
+                    grid[cell(x, y)] = t.code;
+                    visit(p, t.code);
+                    placed_any = true;
                 }
-                None => black_done = true,
+                None => t.done = true,
             }
         }
-        if !red_done {
-            match next_spot(&mut walk_red, &grid, max_pos, half, w, BLACK, red_orient) {
-                Some((p, x, y)) => {
-                    grid[cell(x, y)] = RED;
-                    visit(p, RED);
-                }
-                None => red_done = true,
-            }
+        if !placed_any {
+            break;
         }
     }
     (grid, half)
 }
 
-/// Advance `walker` to the lowest square that is unoccupied and not attacked by
-/// `opponent`, returning `(position, x, y)`. Squares it passes are permanently
-/// unavailable, so the walker never needs to rewind. `orient` transforms the
-/// walker's coordinates (e.g. rotated or mirrored for Red), so the same standard
-/// stepper drives every variant's scan (`position` stays the walker's own).
+/// Advance `walker` to the lowest square that is unoccupied and not attacked by any
+/// color other than `own`, returning `(position, x, y)`. Squares it passes are
+/// permanently unavailable, so the walker never needs to rewind. `orient` transforms
+/// the walker's coordinates (e.g. rotated or mirrored), so the same standard stepper
+/// drives every team's scan (`position` stays the walker's own).
 fn next_spot(
     walker: &mut SpiralWalker,
     grid: &[u8],
     max_pos: u64,
     half: i32,
     w: usize,
-    opponent: u8,
+    own: u8,
     orient: Orient,
 ) -> Option<(u64, i32, i32)> {
     let cell = |x: i32, y: i32| -> usize { (y + half) as usize * w + (x + half) as usize };
@@ -283,9 +349,10 @@ fn next_spot(
         if grid[cell(x, y)] != EMPTY {
             continue;
         }
-        let attacked = KNIGHT_OFFSETS
-            .iter()
-            .any(|&(dx, dy)| grid[cell(x + dx, y + dy)] == opponent);
+        let attacked = KNIGHT_OFFSETS.iter().any(|&(dx, dy)| {
+            let neighbor = grid[cell(x + dx, y + dy)];
+            neighbor != EMPTY && neighbor != own
+        });
         if !attacked {
             return Some((p, x, y));
         }
@@ -326,13 +393,13 @@ mod tests {
         assert_eq!(&red[..A_RED.len()], &A_RED);
     }
 
-    /// No Black knight is a knight's move from a Red knight (mutual exclusion);
-    /// same-color knights a knight's move apart are allowed. The rule is unchanged
-    /// by scan order, so this must hold for *every* variant, across the whole
-    /// rendered window including its boundary.
+    /// No knight is a knight's move from a *different* color (mutual exclusion);
+    /// same-color knights a knight's move apart are allowed. The placement rule
+    /// forbids exactly this, so it must hold for *every* variant — including the
+    /// four-color game — across the whole window, boundary included.
     #[test]
-    fn opposite_colors_never_attack() {
-        for variant in [Variant::Canonical, Variant::Rot180, Variant::Mirror] {
+    fn different_colors_never_attack() {
+        for variant in [Variant::Canonical, Variant::Rot180, Variant::Mirror, Variant::Quad] {
             let r = simulate_redblack(20, variant);
             for y in -r.radius..=r.radius {
                 for x in -r.radius..=r.radius {
@@ -343,7 +410,7 @@ mod tests {
                     for (dx, dy) in KNIGHT_OFFSETS {
                         let other = r.cell(x + dx, y + dy);
                         if other != EMPTY {
-                            assert_eq!(c, other, "{variant:?}: opposite colors attack at ({x},{y})");
+                            assert_eq!(c, other, "{variant:?}: different colors attack at ({x},{y})");
                         }
                     }
                 }
@@ -390,5 +457,27 @@ mod tests {
         // The two transforms produce genuinely different boards.
         let differ = (-40..=40).any(|y| (-40..=40).any(|x| rot.cell(x, y) != mir.cell(x, y)));
         assert!(differ, "rot180 and mirror should not coincide");
+    }
+
+    /// Quad seats four teams in turn order on the standard spiral. The first round
+    /// fills the innermost cells: Black at the center, then Red, Green, Yellow take
+    /// the next three squares of the spiral (1,0), (1,1), (0,1). All four end up on
+    /// the board.
+    #[test]
+    fn quad_seats_four_colors() {
+        let r = simulate_redblack(30, Variant::Quad);
+
+        assert_eq!(r.cell(0, 0), BLACK);
+        assert_eq!(r.cell(1, 0), RED);
+        assert_eq!(r.cell(1, 1), GREEN);
+        assert_eq!(r.cell(0, 1), YELLOW);
+
+        assert_eq!(r.teams(), [BLACK, RED, GREEN, YELLOW]);
+        for code in [BLACK, RED, GREEN, YELLOW] {
+            assert!(r.count(code) > 0, "{} placed nothing", color_name(code));
+        }
+        // Every team's tally plus the empties accounts for the whole window.
+        let empty = r.squares_considered - r.placed();
+        assert_eq!(r.count(EMPTY), empty);
     }
 }

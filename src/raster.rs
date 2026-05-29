@@ -9,7 +9,7 @@
 //! occupancy grid with no intermediate copy.
 
 use crate::courteous::CourteousResult;
-use crate::redblack::{self, RedBlackResult};
+use crate::redblack::RedBlackResult;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::sync::OnceLock;
@@ -71,7 +71,7 @@ pub fn write_indexed(path: &str, img: &IndexedImage) -> io::Result<()> {
 /// Write Red & Black Knights straight from its occupancy grid at `scale` px/cell,
 /// streaming one scanline at a time (no intermediate image buffer).
 pub fn write_redblack_png(path: &str, result: &RedBlackResult, scale: u32) -> io::Result<()> {
-    let palette = redblack::palette();
+    let palette = result.palette();
     let r = result.radius;
     let dim = (2 * r + 1) as u32 * scale;
     let mut w = BufWriter::new(File::create(path)?);

@@ -29,7 +29,7 @@ Knight problems on a numbered square spiral.
 Usage:
   knights [trapped]   [--start <n>] [--canvas <px>] [--out <path>]
   knights  courteous  [--radius <r>] [--format svg|png] [--canvas <px>] [--squaresize <px>] [--out <path>]
-  knights  redblack   [--radius <r>] [--variant canonical|rot180|mirror] [--format svg|png] [--canvas <px>] [--squaresize <px>] [--out <path>]
+  knights  redblack   [--radius <r>] [--variant canonical|rot180|mirror|quad] [--format svg|png] [--canvas <px>] [--squaresize <px>] [--out <path>]
 
 Subcommands:
   trapped     One knight hops to the lowest-numbered unvisited square until
@@ -42,10 +42,10 @@ Subcommands:
 Options:
   --start <n>        Number of the center square (default 1).
   --variant <v>      Red/black only: canonical (default; reproduces OEIS
-                     A392177/A392178), rot180 (Red's spiral rotated 180°), or
-                     mirror (Red's spiral reflected across the y-axis: left, up,
-                     right, down). rot180/mirror mitigate Black's first-mover bias
-                     and are non-canonical.
+                     A392177/A392178), rot180 (Red's spiral rotated 180°), mirror
+                     (Red's spiral reflected across the y-axis: left, up, right,
+                     down), or quad (four colors — Black, Red, Green, Yellow — all
+                     on the same spiral). All but canonical are non-canonical.
   --radius <r>       Half-width of the region in cells (default 30; 80 for redblack).
   --format <f>       Output format: svg or png (default svg, or inferred from --out).
                      PNG is indexed-color, for the board problems, and scales to
@@ -153,8 +153,9 @@ fn main() {
                     "canonical" => Variant::Canonical,
                     "rot180" => Variant::Rot180,
                     "mirror" => Variant::Mirror,
+                    "quad" => Variant::Quad,
                     _ => fail(&format!(
-                        "invalid --variant: {v} (expected canonical, rot180, or mirror)"
+                        "invalid --variant: {v} (expected canonical, rot180, mirror, or quad)"
                     )),
                 };
             }
@@ -191,6 +192,7 @@ fn main() {
             Variant::Canonical => "red_black_knights",
             Variant::Rot180 => "red_black_knights_rot180",
             Variant::Mirror => "red_black_knights_mirror",
+            Variant::Quad => "red_black_knights_quad",
         },
     };
     let out = out.unwrap_or_else(|| format!("out/{base}.{}", format.ext()));
@@ -254,19 +256,30 @@ fn main() {
             let t = Instant::now();
             let result = simulate_redblack(radius, variant);
             let sim = t.elapsed();
-            let placed = result.black + result.red;
-            let empty = result.squares_considered as usize - placed;
+            let placed = result.placed();
+            let empty = result.squares_considered - placed;
+            let breakdown = result
+                .teams()
+                .iter()
+                .map(|&c| format!("{} {}", result.count(c), redblack::color_name(c)))
+                .collect::<Vec<_>>()
+                .join(", ");
             println!(
-                "Placed {} knights ({} Black, {} Red) among the first {} squares (radius {}); \
+                "Placed {} knights ({}) among the first {} squares (radius {}); \
                  {} left empty.",
-                placed, result.black, result.red, result.squares_considered, result.radius, empty
+                placed, breakdown, result.squares_considered, result.radius, empty
             );
-            println!(
-                "Variant: {} — symmetry: rotate-180+swap {:.1}%, mirror-Y+swap {:.1}%.",
-                variant.name(),
-                result.rot_swap_symmetry() * 100.0,
-                result.mirror_swap_symmetry() * 100.0
-            );
+            // Rotate/mirror symmetry is only meaningful for the two-color variants.
+            if result.teams().len() == 2 {
+                println!(
+                    "Variant: {} — symmetry: rotate-180+swap {:.1}%, mirror-Y+swap {:.1}%.",
+                    variant.name(),
+                    result.rot_swap_symmetry() * 100.0,
+                    result.mirror_swap_symmetry() * 100.0
+                );
+            } else {
+                println!("Variant: {}.", variant.name());
+            }
             let t = Instant::now();
             let kind = match format {
                 Format::Svg => {

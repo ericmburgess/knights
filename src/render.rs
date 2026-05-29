@@ -149,8 +149,8 @@ pub fn render_courteous_svg(result: &CourteousResult, canvas: f64) -> String {
     svg
 }
 
-/// Render Red & Black Knights: each placed knight as a near-solid cell in its
-/// team color, so territory reads as solid blocks.
+/// Render the placement game (two- or four-color): each placed knight as a
+/// near-solid cell in its team color, so territory reads as solid blocks.
 pub fn render_redblack_svg(result: &RedBlackResult, canvas: f64) -> String {
     let r = result.radius;
     let margin = margin_for(canvas);
@@ -160,11 +160,11 @@ pub fn render_redblack_svg(result: &RedBlackResult, canvas: f64) -> String {
     let size_px = (cell * 0.92).max(1.0);
     let rx = size_px * 0.15;
 
-    // Hex color per occupant code (index = code), so adding piece types just
-    // grows the palette without touching this loop.
-    let hexes: Vec<String> = redblack::palette().iter().map(|&c| rgb_hex(c)).collect();
+    // Hex color per occupant code (index = code), so more piece types just grow
+    // the palette without touching this loop.
+    let hexes: Vec<String> = result.palette().iter().map(|&c| rgb_hex(c)).collect();
 
-    let mut svg = svg_open((result.black + result.red) * 96 + 1024, canvas);
+    let mut svg = svg_open(result.placed() as usize * 96 + 1024, canvas);
     for y in -r..=r {
         for x in -r..=r {
             let code = result.cell(x, y);
@@ -176,11 +176,21 @@ pub fn render_redblack_svg(result: &RedBlackResult, canvas: f64) -> String {
         }
     }
 
-    let rows = [
-        (hexes[redblack::BLACK as usize].as_str(), format!("Black: {}", result.black)),
-        (hexes[redblack::RED as usize].as_str(), format!("Red: {}", result.red)),
-    ];
-    legend(&mut svg, margin, ui, "Red & Black Knights", &rows);
+    // One legend row per team, in turn order.
+    let rows: Vec<(&str, String)> = result
+        .teams()
+        .iter()
+        .map(|&code| {
+            let label = format!("{}: {}", redblack::color_name(code), result.count(code));
+            (hexes[code as usize].as_str(), label)
+        })
+        .collect();
+    let title = if result.teams().len() > 2 {
+        "Four-Color Knights"
+    } else {
+        "Red & Black Knights"
+    };
+    legend(&mut svg, margin, ui, title, &rows);
 
     svg.push_str("</svg>\n");
     svg
