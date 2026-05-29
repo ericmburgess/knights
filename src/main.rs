@@ -5,9 +5,15 @@
 //!              square until trapped; renders its path.
 //!   courteous  Problem 2 — place a knight on every square not attacked by an
 //!              earlier knight; renders the resulting clusters.
+//!   redblack   Problem 3 — two teams alternate placing knights; renders the
+//!              territories that emerge.
+//!
+//! The board problems can render to SVG (default) or, for huge radii, to an
+//! indexed PNG (`--format png`).
 
 mod courteous;
 mod knight;
+mod raster;
 mod redblack;
 mod render;
 mod spiral;
@@ -22,8 +28,8 @@ Knight problems on a numbered square spiral.
 
 Usage:
   knights [trapped]   [--start <n>] [--canvas <px>] [--out <path>]
-  knights  courteous  [--radius <r>] [--canvas <px>] [--start <n>] [--out <path>]
-  knights  redblack   [--radius <r>] [--canvas <px>] [--out <path>]
+  knights  courteous  [--radius <r>] [--format svg|png] [--canvas <px>] [--squaresize <px>] [--out <path>]
+  knights  redblack   [--radius <r>] [--format svg|png] [--canvas <px>] [--squaresize <px>] [--out <path>]
 
 Subcommands:
   trapped     One knight hops to the lowest-numbered unvisited square until
@@ -34,16 +40,41 @@ Subcommands:
               square not attacked by the other color, over the given radius.
 
 Options:
-  --start <n>   Number of the center square (default 1).
-  --radius <r>  Half-width of the region in cells (default 30; 80 for redblack).
-  --canvas <px> Width/height of the square SVG canvas in pixels (default 1600).
-  --out <path>  Where to write the SVG (defaults per subcommand).
-  -h, --help    Show this help.";
+  --start <n>        Number of the center square (default 1).
+  --radius <r>       Half-width of the region in cells (default 30; 80 for redblack).
+  --format <f>       Output format: svg or png (default svg, or inferred from --out).
+                     PNG is indexed-color, for the board problems, and scales to
+                     huge radii where SVG would be impractical.
+  --canvas <px>      SVG canvas size in pixels (default 1600). SVG only.
+  --squaresize <px>  PNG pixels per square (default 1). PNG only.
+  --out <path>       Where to write the output (defaults per subcommand and format).
+  -h, --help         Show this help.";
 
 enum Problem {
     Trapped,
     Courteous,
     RedBlack,
+}
+
+enum Format {
+    Svg,
+    Png,
+}
+
+impl Format {
+    fn ext(&self) -> &'static str {
+        match self {
+            Format::Svg => "svg",
+            Format::Png => "png",
+        }
+    }
+}
+
+/// Write the output, exiting with an error message on failure.
+fn write_or_fail(result: std::io::Result<()>, out: &str) {
+    if let Err(e) = result {
+        fail(&format!("failed to write {out}: {e}"));
+    }
 }
 
 fn main() {
@@ -69,7 +100,9 @@ fn main() {
         _ => 30,
     };
     let mut canvas: f64 = 1600.0;
+    let mut squaresize: u32 = 1;
     let mut out: Option<String> = None;
+    let mut format: Option<Format> = None;
     while i < args.len() {
         match args[i].as_str() {
             "--start" => {
@@ -90,6 +123,23 @@ fn main() {
                     fail("--canvas must be a positive number of pixels");
                 }
             }
+            "--squaresize" => {
+                i += 1;
+                let v = args.get(i).unwrap_or_else(|| fail("--squaresize needs a value"));
+                squaresize = v.parse().unwrap_or_else(|_| fail(&format!("invalid --squaresize: {v}")));
+                if squaresize == 0 {
+                    fail("--squaresize must be at least 1 pixel");
+                }
+            }
+            "--format" => {
+                i += 1;
+                let v = args.get(i).unwrap_or_else(|| fail("--format needs a value"));
+                format = Some(match v.as_str() {
+                    "svg" => Format::Svg,
+                    "png" => Format::Png,
+                    _ => fail(&format!("invalid --format: {v} (expected svg or png)")),
+                });
+            }
             "--out" => {
                 i += 1;
                 out = Some(args.get(i).unwrap_or_else(|| fail("--out needs a value")).clone());
@@ -103,9 +153,28 @@ fn main() {
         i += 1;
     }
 
-    let (svg, out, sim, render) = match problem {
+    // Resolve format (explicit --format, else inferred from --out, else SVG) and
+    // the output path (default name per subcommand and format).
+    let format = format.unwrap_or_else(|| match out.as_deref() {
+        Some(p) if p.to_ascii_lowercase().ends_with(".png") => Format::Png,
+        _ => Format::Svg,
+    });
+    let base = match &problem {
+        Problem::Trapped => "trapped_knight",
+        Problem::Courteous => "courteous_knights",
+        Problem::RedBlack => "red_black_knights",
+    };
+    let out = out.unwrap_or_else(|| format!("out/{base}.{}", format.ext()));
+
+    if matches!(format, Format::Png) && matches!(problem, Problem::Trapped) {
+        fail("PNG output is only for the board problems (courteous, redblack); \
+              the trapped-knight path renders to SVG.");
+    }
+
+    // Each arm simulates (timed as `sim`), then renders and writes the output
+    // (timed together as `render` — for streamed PNG the two are fused).
+    let (kind, sim, render) = match problem {
         Problem::Trapped => {
-            let out = out.unwrap_or_else(|| "out/trapped_knight.svg".to_string());
             let t = Instant::now();
             let result = simulate_trapped_knight(start);
             let sim = t.elapsed();
@@ -117,10 +186,10 @@ fn main() {
             );
             let t = Instant::now();
             let svg = render::render_path_svg(&result, canvas);
-            (svg, out, sim, t.elapsed())
+            write_or_fail(render::write_svg(&svg, &out), &out);
+            ("SVG", sim, t.elapsed())
         }
         Problem::Courteous => {
-            let out = out.unwrap_or_else(|| "out/courteous_knights.svg".to_string());
             let t = Instant::now();
             let result = simulate_courteous(radius, start);
             let sim = t.elapsed();
@@ -138,11 +207,21 @@ fn main() {
             println!("Cluster sizes (size×count): {}", hist.join(", "));
             println!("First squares with knights: {:?}", result.first_squares(16));
             let t = Instant::now();
-            let svg = render::render_courteous_svg(&result, canvas);
-            (svg, out, sim, t.elapsed())
+            let kind = match format {
+                Format::Svg => {
+                    let svg = render::render_courteous_svg(&result, canvas);
+                    write_or_fail(render::write_svg(&svg, &out), &out);
+                    "SVG"
+                }
+                Format::Png => {
+                    let img = raster::courteous_image(&result, squaresize);
+                    write_or_fail(raster::write_indexed(&out, &img), &out);
+                    "PNG"
+                }
+            };
+            (kind, sim, t.elapsed())
         }
         Problem::RedBlack => {
-            let out = out.unwrap_or_else(|| "out/red_black_knights.svg".to_string());
             let t = Instant::now();
             let result = simulate_redblack(radius);
             let sim = t.elapsed();
@@ -154,16 +233,23 @@ fn main() {
                 placed, result.black, result.red, result.squares_considered, result.radius, empty
             );
             let t = Instant::now();
-            let svg = render::render_redblack_svg(&result, canvas);
-            (svg, out, sim, t.elapsed())
+            let kind = match format {
+                Format::Svg => {
+                    let svg = render::render_redblack_svg(&result, canvas);
+                    write_or_fail(render::write_svg(&svg, &out), &out);
+                    "SVG"
+                }
+                Format::Png => {
+                    write_or_fail(raster::write_redblack_png(&out, &result, squaresize), &out);
+                    "PNG"
+                }
+            };
+            (kind, sim, t.elapsed())
         }
     };
 
     println!("Simulated in {sim:.2?}; rendered in {render:.2?}.");
-    match render::write_svg(&svg, &out) {
-        Ok(()) => println!("Wrote SVG to {out}"),
-        Err(e) => fail(&format!("failed to write {out}: {e}")),
-    }
+    println!("Wrote {kind} to {out}");
 }
 
 fn fail(msg: &str) -> ! {

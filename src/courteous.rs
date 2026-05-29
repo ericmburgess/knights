@@ -76,7 +76,7 @@ impl CourteousResult {
 /// affect which squares receive knights.
 pub fn simulate_courteous(radius: i32, start: u64) -> CourteousResult {
     let radius = radius.max(0);
-    let mut spiral = Spiral::new();
+    let mut spiral = Spiral::positional();
     spiral.ensure_radius(radius);
     let d = (2 * radius + 1) as u64;
     let squares_considered = d * d;

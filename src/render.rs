@@ -7,7 +7,7 @@
 
 use crate::courteous::CourteousResult;
 use crate::knight::SimResult;
-use crate::redblack::{Color, RedBlackResult};
+use crate::redblack::{self, RedBlackResult};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -160,20 +160,35 @@ pub fn render_redblack_svg(result: &RedBlackResult, canvas: f64) -> String {
     let size_px = (cell * 0.92).max(1.0);
     let rx = size_px * 0.15;
 
-    let mut svg = svg_open(result.knights.len() * 96 + 1024, canvas);
-    for &(_, x, y, color) in &result.knights {
-        let (px, py) = vp.to_px(x, y);
-        cell_rect(&mut svg, px, py, size_px, rx, redblack_color(color));
+    // Hex color per occupant code (index = code), so adding piece types just
+    // grows the palette without touching this loop.
+    let hexes: Vec<String> = redblack::palette().iter().map(|&c| rgb_hex(c)).collect();
+
+    let mut svg = svg_open((result.black + result.red) * 96 + 1024, canvas);
+    for y in -r..=r {
+        for x in -r..=r {
+            let code = result.cell(x, y);
+            if code == redblack::EMPTY {
+                continue;
+            }
+            let (px, py) = vp.to_px(x, y);
+            cell_rect(&mut svg, px, py, size_px, rx, &hexes[code as usize]);
+        }
     }
 
     let rows = [
-        (redblack_color(Color::Black), format!("Black: {}", result.black)),
-        (redblack_color(Color::Red), format!("Red: {}", result.red)),
+        (hexes[redblack::BLACK as usize].as_str(), format!("Black: {}", result.black)),
+        (hexes[redblack::RED as usize].as_str(), format!("Red: {}", result.red)),
     ];
     legend(&mut svg, margin, ui, "Red & Black Knights", &rows);
 
     svg.push_str("</svg>\n");
     svg
+}
+
+/// Format an RGB triple as an SVG hex color.
+fn rgb_hex((r, g, b): (u8, u8, u8)) -> String {
+    format!("#{r:02x}{g:02x}{b:02x}")
 }
 
 /// A filled, slightly-rounded cell centered on `(px, py)`.
@@ -230,14 +245,6 @@ fn legend(svg: &mut String, margin: f64, ui: f64, title: &str, rows: &[(&str, St
 /// Escape text for inclusion in SVG/XML content.
 fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
-}
-
-/// Team colors for Red & Black Knights.
-fn redblack_color(c: Color) -> &'static str {
-    match c {
-        Color::Black => "#1a1a1a",
-        Color::Red => "#d11f1f",
-    }
 }
 
 /// Color a knight by the size of the cluster it belongs to.

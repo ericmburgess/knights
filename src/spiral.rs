@@ -13,46 +13,48 @@
 
 use std::collections::HashMap;
 
-pub struct Spiral {
-    /// position (0-based) -> coordinate
-    coords: Vec<(i32, i32)>,
-    /// coordinate -> position (0-based)
-    index: HashMap<(i32, i32), u64>,
-    // --- incremental walker state ---
-    /// coordinate of the last cell placed
-    cx: i32,
-    cy: i32,
+/// Walks the square spiral one cell at a time, holding only O(1) state and no
+/// history. This is the stepping primitive: [`Spiral`] uses it to fill its
+/// lookup tables, and the placement simulations that don't need a stored table
+/// drive it directly (so they never allocate per-cell memory).
+pub struct SpiralWalker {
+    /// position of the cell `step` will return next
+    pos: u64,
+    /// coordinate of that cell
+    x: i32,
+    y: i32,
     /// index of the current spiral arm (0 = first arm going right)
     arm: u32,
     /// steps remaining before the current arm turns
-    steps_left_in_arm: u32,
+    steps_left: u32,
     /// direction of the current arm: 0=right, 1=up, 2=left, 3=down
     dir: usize,
 }
 
-impl Spiral {
+impl SpiralWalker {
     pub fn new() -> Self {
-        let mut s = Spiral {
-            coords: Vec::new(),
-            index: HashMap::new(),
-            cx: 0,
-            cy: 0,
+        SpiralWalker {
+            pos: 0,
+            x: 0,
+            y: 0,
             arm: 0,
-            steps_left_in_arm: 0,
+            steps_left: 0,
             dir: 0,
-        };
-        // Position 0 is the center.
-        s.coords.push((0, 0));
-        s.index.insert((0, 0), 0);
-        s
+        }
     }
 
-    /// Append the next cell to the spiral.
-    fn extend_by_one(&mut self) {
-        if self.steps_left_in_arm == 0 {
+    /// The position of the cell the next [`step`](Self::step) will return.
+    pub fn position(&self) -> u64 {
+        self.pos
+    }
+
+    /// Return the current cell as `(position, x, y)` and advance to the next.
+    pub fn step(&mut self) -> (u64, i32, i32) {
+        let here = (self.pos, self.x, self.y);
+        if self.steps_left == 0 {
             // Begin a new arm. Arm lengths grow 1,1,2,2,3,3,… and the
             // direction cycles right, up, left, down.
-            self.steps_left_in_arm = self.arm / 2 + 1;
+            self.steps_left = self.arm / 2 + 1;
             self.dir = (self.arm % 4) as usize;
             self.arm += 1;
         }
@@ -62,13 +64,48 @@ impl Spiral {
             2 => (-1, 0), // left
             _ => (0, -1), // down
         };
-        self.cx += dx;
-        self.cy += dy;
-        self.steps_left_in_arm -= 1;
+        self.x += dx;
+        self.y += dy;
+        self.steps_left -= 1;
+        self.pos += 1;
+        here
+    }
+}
 
-        let pos = self.coords.len() as u64;
-        self.coords.push((self.cx, self.cy));
-        self.index.insert((self.cx, self.cy), pos);
+pub struct Spiral {
+    /// position (0-based) -> coordinate
+    coords: Vec<(i32, i32)>,
+    /// coordinate -> position (0-based); empty unless `track_index` is set
+    index: HashMap<(i32, i32), u64>,
+    /// whether to maintain the reverse `index` map (needed for `coord_to_index`)
+    track_index: bool,
+    /// stepper used to extend the tables
+    walker: SpiralWalker,
+}
+
+impl Spiral {
+    /// A spiral that maps both directions, so [`coord_to_index`](Self::coord_to_index)
+    /// works. Used by the trapped knight, which looks up neighbor positions.
+    pub fn new() -> Self {
+        Self::build(true)
+    }
+
+    /// A spiral that only maps position -> coordinate, with no reverse `HashMap`.
+    /// The placement problems never call [`coord_to_index`](Self::coord_to_index),
+    /// so this saves a large amount of memory at big radii (millions of cells).
+    pub fn positional() -> Self {
+        Self::build(false)
+    }
+
+    fn build(track_index: bool) -> Self {
+        let mut s = Spiral {
+            coords: Vec::new(),
+            index: HashMap::new(),
+            track_index,
+            walker: SpiralWalker::new(),
+        };
+        s.ensure_radius(0); // materialize the center (position 0 = (0, 0))
+        s
     }
 
     /// Walk the spiral until every cell within Chebyshev radius `r` of the
@@ -78,11 +115,16 @@ impl Spiral {
         let d = 2 * r + 1;
         let target = d * d;
         while (self.coords.len() as u64) < target {
-            self.extend_by_one();
+            let (pos, x, y) = self.walker.step();
+            self.coords.push((x, y));
+            if self.track_index {
+                self.index.insert((x, y), pos);
+            }
         }
     }
 
     /// The spiral position at coordinate `(x, y)`, if it has been mapped.
+    /// Always returns `None` on a [`positional`](Self::positional) spiral.
     pub fn coord_to_index(&self, x: i32, y: i32) -> Option<u64> {
         self.index.get(&(x, y)).copied()
     }
@@ -117,6 +159,26 @@ mod tests {
         for (n, &coord) in expected.iter().enumerate() {
             assert_eq!(s.index_to_coord(n as u64), coord, "position {n}");
             assert_eq!(s.coord_to_index(coord.0, coord.1), Some(n as u64));
+        }
+    }
+
+    #[test]
+    fn walker_matches_spiral_layout() {
+        let expected = [
+            (0, 0),
+            (1, 0),
+            (1, 1),
+            (0, 1),
+            (-1, 1),
+            (-1, 0),
+            (-1, -1),
+            (0, -1),
+            (1, -1),
+        ];
+        let mut w = SpiralWalker::new();
+        for (n, &coord) in expected.iter().enumerate() {
+            assert_eq!(w.position(), n as u64);
+            assert_eq!(w.step(), (n as u64, coord.0, coord.1));
         }
     }
 
