@@ -163,6 +163,7 @@ impl KnightsApp {
         }
         let image = egui::ColorImage { size: [n, n], pixels };
         self.board = Some(ctx.load_texture("board", image, egui::TextureOptions::NEAREST));
+        self.pan = egui::Vec2::ZERO; // recenter the fresh board (zoom is left as-is)
 
         let breakdown = result
             .legend()
