@@ -14,6 +14,19 @@ use knights_core::piece::KindBuilder;
 use knights_core::raster;
 use knights_core::spiral::{Direction, Handedness};
 use std::collections::BTreeSet;
+use web_time::Instant;
+
+/// Colors auto-assigned to pieces as they're added, cycled in order.
+const AUTO_COLORS: [[u8; 3]; 8] = [
+    [26, 26, 26],   // black
+    [209, 31, 31],  // red
+    [38, 160, 65],  // green
+    [242, 201, 33], // yellow
+    [40, 103, 222], // blue
+    [35, 178, 196], // cyan
+    [190, 55, 170], // magenta
+    [237, 139, 32], // orange
+];
 
 /// Half-width of the offset editor grid (covers leapers reaching up to 4 squares).
 const GRID_R: i32 = 5;
@@ -92,10 +105,10 @@ impl KnightsApp {
             selected_type: knight,
             types,
             pieces: vec![
-                PieceEdit { type_idx: knight, color: [26, 26, 26], direction: Direction::Right, handed: Handedness::Ccw, label: "Black".to_owned() },
-                PieceEdit { type_idx: knight, color: [209, 31, 31], direction: Direction::Right, handed: Handedness::Ccw, label: "Red".to_owned() },
+                PieceEdit { type_idx: knight, color: AUTO_COLORS[0], direction: Direction::Right, handed: Handedness::Ccw, label: "Black".to_owned() },
+                PieceEdit { type_idx: knight, color: AUTO_COLORS[1], direction: Direction::Right, handed: Handedness::Ccw, label: "Red".to_owned() },
             ],
-            radius: 80,
+            radius: 400,
             export_scale: 4,
             board: None,
             status: "Edit pieces, then press Simulate.".to_owned(),
@@ -136,7 +149,9 @@ impl KnightsApp {
                 return;
             }
         };
+        let t = Instant::now();
         let result = engine::simulate(self.radius, cfg);
+        let elapsed = t.elapsed();
         let palette = result.palette();
         let n = (2 * self.radius + 1) as usize;
         let mut pixels = Vec::with_capacity(n * n);
@@ -157,11 +172,12 @@ impl KnightsApp {
             .join(", ");
         let placed: u64 = result.legend().iter().map(|row| row.count).sum();
         self.status = format!(
-            "radius {}: {} placed ({}), {} empty.",
+            "radius {}: {} placed ({}), {} empty. Simulated in {:.1?}.",
             result.radius,
             placed,
             breakdown,
-            result.squares_considered - placed
+            result.squares_considered - placed,
+            elapsed
         );
     }
 
@@ -366,8 +382,8 @@ impl KnightsApp {
         ui.horizontal(|ui| {
             if ui.button("+ piece").clicked() {
                 self.pieces.push(PieceEdit {
-                    type_idx: 0,
-                    color: [38, 160, 65],
+                    type_idx: self.selected_type,
+                    color: AUTO_COLORS[self.pieces.len() % AUTO_COLORS.len()],
                     direction: Direction::Right,
                     handed: Handedness::Ccw,
                     label: String::new(),
@@ -434,7 +450,17 @@ impl eframe::App for KnightsApp {
                 ui.heading("knights");
                 ui.separator();
                 ui.label("radius");
-                ui.add(egui::Slider::new(&mut self.radius, 10..=400));
+                for r in [100, 200, 400, 800, 1600] {
+                    if ui.selectable_label(self.radius == r, r.to_string()).clicked() {
+                        self.radius = r;
+                    }
+                }
+                ui.add(
+                    egui::DragValue::new(&mut self.radius)
+                        .speed(5)
+                        .range(10..=2000),
+                )
+                .on_hover_text("Manual radius (board display is capped here; the CLI renders bigger)");
                 if ui.button("Simulate").clicked() {
                     self.simulate(ctx);
                 }
