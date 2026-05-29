@@ -1,0 +1,7 @@
+[package]
+name = "knights"
+version = "0.1.0"
+edition = "2021"
+
+# Milestone 1: zero external dependencies — std only.
+[dependencies]
