@@ -24,6 +24,7 @@ hand-rolled indexed PNG; TOML configs use `serde` + `toml`. (No SVG — it was r
 - `raster.rs` — streaming indexed-color PNG (any `Board`) + the courteous rasterizer.
 
 `cli/src/main.rs` — CLI front-end over `knights_core`: subcommand dispatch + flag parsing, PNG output (and trapped's text result).
+`web/` — egui→WASM front-end (`eframe`); currently a viewer (radius/variant + Simulate). Run with `trunk serve` — see `web/README.md`. Excluded from the default workspace build (heavy deps); built via `trunk` or `cargo … -p knights-web`.
 `examples/*.toml` — sample `custom` configs (canonical redblack, four-color, mixed piece types).
 
 Each module's doc-comment explains its design — start there.

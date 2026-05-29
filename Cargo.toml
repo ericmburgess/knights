@@ -1,3 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["core", "cli"]
+members = ["core", "cli", "web"]
+# Default build/test/run stays on the lean native crates; the web app (eframe's heavy
+# dep tree) is built explicitly via `trunk` or `cargo build -p knights-web`.
+default-members = ["core", "cli"]
