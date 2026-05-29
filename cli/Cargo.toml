@@ -1,0 +1,11 @@
+[package]
+name = "knights"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "knights"
+path = "src/main.rs"
+
+[dependencies]
+knights-core = { path = "../core" }

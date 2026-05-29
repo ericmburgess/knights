@@ -388,14 +388,17 @@ mod tests {
             orientation = "cw"
             label = "Wazirs"
         "##;
+        use crate::engine::Board;
         let cfg = from_toml(toml).expect("valid config");
         let result = engine::simulate(8, cfg);
 
-        // SVG carries both colors and both legend labels.
-        let svg = crate::render::render_board_svg(&result, "Custom Placement", 800.0);
-        for needle in ["#112233", "#aabbcc", "Knights", "Wazirs", "<rect"] {
-            assert!(svg.contains(needle), "SVG missing {needle:?}");
-        }
+        // Legend labels and palette colors come through from the config.
+        let labels: Vec<String> = result.legend().into_iter().map(|row| row.label).collect();
+        assert!(labels.contains(&"Knights".to_string()), "missing Knights label");
+        assert!(labels.contains(&"Wazirs".to_string()), "missing Wazirs label");
+        let palette = result.palette();
+        assert!(palette.contains(&(0x11, 0x22, 0x33)), "missing knight color");
+        assert!(palette.contains(&(0xaa, 0xbb, 0xcc)), "missing wazir color");
 
         // PNG streams out a structurally valid file (starts with the PNG signature).
         let path = std::env::temp_dir().join("knights_custom_e2e.png");

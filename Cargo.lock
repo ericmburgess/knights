@@ -28,6 +28,13 @@ dependencies = [
 name = "knights"
 version = "0.1.0"
 dependencies = [
+ "knights-core",
+]
+
+[[package]]
+name = "knights-core"
+version = "0.1.0"
+dependencies = [
  "serde",
  "toml",
 ]

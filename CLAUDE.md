@@ -2,8 +2,10 @@
 
 Visualizes chess-knight problems on a number-spiral grid (from a Numberphile video —
 see `KNIGHTS.md` for the canonical problem statements and validated outcomes), plus a
-general, config-driven placement engine that the multi-color games are presets of. One
-small Cargo binary; SVG and PNG output are hand-rolled, TOML configs use `serde` + `toml`.
+general, config-driven placement engine that the multi-color games are presets of. A
+Cargo **workspace**: `core` (the engine, a library) + `cli` (headless/batch renders);
+a `web` front-end (egui → WASM, interactive editor + display) is in progress. Output is
+hand-rolled indexed PNG; TOML configs use `serde` + `toml`. (No SVG — it was removed.)
 
 > Keep this file thin and pointer-shaped. The *how* and *why* live in each module's
 > doc-comment; the facts that must stay true live in the tests. Don't restate either
@@ -11,32 +13,33 @@ small Cargo binary; SVG and PNG output are hand-rolled, TOML configs use `serde`
 
 ## Layout
 
-- `src/main.rs` — CLI: subcommand dispatch + flag parsing; chooses SVG vs PNG.
-- `src/spiral.rs` — square-spiral coordinates: `SpiralWalker` (O(1) stepper, any of the 8 orientations via `oriented`) and `Spiral` (cached tables).
-- `src/piece.rs` — piece types (finite attack-offset lists) and the cell-byte `KindTable` ((type, color) → one `u8`).
-- `src/engine.rs` — the general placement engine: round-robin pieces on their own spirals, the backward attack check, `PlacementResult`, and the `Board` render trait.
-- `src/config.rs` — TOML config schema (serde) → validated `EngineConfig`.
-- `src/redblack.rs` — Problem 3 + variants, now thin presets (`Variant::engine_config`) over `engine`.
-- `src/knight.rs` — Problem 1, the trapped knight (and the 8 knight offsets, shared).
-- `src/courteous.rs` — Problem 2, courteous knights + cluster grouping.
-- `src/render.rs` — SVG: trapped path, courteous clusters, and any `Board` (`render_board_svg`).
-- `src/raster.rs` — streaming indexed-color PNG (any `Board`) + the courteous rasterizer.
-- `examples/*.toml` — sample `custom` configs (canonical redblack, four-color, mixed piece types).
+`core/src/` (library `knights_core`, the engine — pure compute + PNG bytes, WASM-ready):
+- `spiral.rs` — square-spiral coordinates: `SpiralWalker` (O(1) stepper, any of the 8 orientations via `oriented`) and `Spiral` (cached tables).
+- `piece.rs` — piece types (finite attack-offset lists) and the cell-byte `KindTable` ((type, color) → one `u8`).
+- `engine.rs` — the general placement engine: round-robin pieces on their own spirals, the backward attack check, `PlacementResult`, and the `Board` render trait.
+- `config.rs` — TOML config schema (serde) → validated `EngineConfig`.
+- `redblack.rs` — Problem 3 + variants, thin presets (`Variant::engine_config`) over `engine`.
+- `knight.rs` — Problem 1, the trapped knight (and the 8 knight offsets, shared).
+- `courteous.rs` — Problem 2, courteous knights + cluster grouping.
+- `raster.rs` — streaming indexed-color PNG (any `Board`) + the courteous rasterizer.
 
-Each file's module doc-comment explains its design — start there.
+`cli/src/main.rs` — CLI front-end over `knights_core`: subcommand dispatch + flag parsing, PNG output (and trapped's text result).
+`examples/*.toml` — sample `custom` configs (canonical redblack, four-color, mixed piece types).
+
+Each module's doc-comment explains its design — start there.
 
 ## Run / test
 
-- `cargo test` — includes the verification oracles below.
-- `cargo run -- [trapped|courteous|redblack|custom] [flags]` (default: `trapped`, SVG into `out/`).
+- `cargo test` — whole workspace; includes the verification oracles below.
+- `cargo run -- [trapped|courteous|redblack|custom] [flags]` (default: `trapped`). `trapped`
+  prints text only; the board problems write a PNG into `out/`.
 - `cargo run --release -- redblack --radius 2000` for large boards.
 - `cargo run -- custom --config examples/mixed-pieces.toml` — arbitrary games; the TOML
-  schema (piece types + pieces with offsets/spiral/color) lives in `config.rs`.
+  schema (piece types + pieces with offsets/spiral/color) lives in `core/src/config.rs`.
 
-Flags: `--radius <r>`, `--start <n>`, `--format svg|png` (PNG is board-problems only),
-`--canvas <px>` (SVG size, default 1600), `--squaresize <px>` (PNG pixels/square, default 1),
-`--variant canonical|rot180|mirror|quad` (redblack only; `rot180`/`mirror` reorient Red's
-spiral, `quad` plays four colors — all non-canonical experiments, see `redblack.rs`),
+Flags: `--radius <r>`, `--start <n>` (trapped only), `--squaresize <px>` (PNG pixels/square,
+default 1), `--variant canonical|rot180|mirror|quad` (redblack only; `rot180`/`mirror` reorient
+Red's spiral, `quad` plays four colors — all non-canonical experiments, see `redblack.rs`),
 `--config <path>` (required by `custom`), `--out <path>`. See `cargo run -- --help`.
 
 ## Verification oracles (enforced by tests — trust these, not prose)
