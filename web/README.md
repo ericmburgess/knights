@@ -16,11 +16,12 @@ A visual editor for arbitrary placement games:
 - The board view supports **drag to pan** and **scroll to zoom** (Reset view recenters).
 - **Export PNG** re-renders at the chosen scale — a browser download on the web, a
   `knights_export.png` file natively.
-- **Persists** your custom piece types and named saved configs in the browser
-  (localStorage) across visits.
+- **Persists your whole workspace** in the browser (localStorage) — custom piece types,
+  named saved configs, and your exact last board — so you reopen right where you left off.
 - **Save current** stores the setup under a name (Load/delete from the list), and
   **Copy link** puts a shareable URL on your clipboard — opening it (`…/#<code>`)
-  reconstructs the board client-side, no backend involved.
+  reconstructs the board client-side (carrying your custom pieces too, including
+  unplaced ones), no backend involved.
 
 It opens on the canonical red/black setup so there's something to Simulate immediately.
 

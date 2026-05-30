@@ -12,7 +12,7 @@ use eframe::egui;
 use knights_core::engine::{self, Board, EngineConfig, PieceSpec};
 use knights_core::piece::KindBuilder;
 use knights_core::raster;
-use knights_core::share::{self, PieceRef, ShareConfig, SharePiece};
+use knights_core::share::{self, PieceRef, ShareConfig, SharePiece, ShareType};
 use knights_core::spiral::{Direction, Handedness};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -22,8 +22,15 @@ use web_time::Instant;
 /// (built-ins are code-defined) and their named saved configs.
 #[derive(Default, Serialize, Deserialize)]
 struct Persisted {
+    #[serde(default)]
     custom_types: Vec<StoredType>,
+    #[serde(default)]
     saved: Vec<SavedConfig>,
+    /// The exact last working board (pieces + radius + custom types) to reopen into.
+    #[serde(default)]
+    session: Option<ShareConfig>,
+    #[serde(default)]
+    selected_type: usize,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -166,8 +173,14 @@ impl KnightsApp {
                     });
                 }
                 app.saved = p.saved;
+                // Restore the exact last board (its custom types dedupe against the above).
+                if let Some(session) = p.session {
+                    app.apply_share(session);
+                }
+                app.selected_type = p.selected_type.min(app.types.len() - 1);
             }
         }
+        // A share link wins over the restored session (you clicked it to view that board).
         if let Some(cfg) = initial {
             app.apply_share(cfg);
             app.status = "Loaded a shared config — press Simulate.".to_owned();
@@ -196,12 +209,27 @@ impl KnightsApp {
                 }
             })
             .collect();
-        ShareConfig { version: share::VERSION, radius: self.radius, pieces }
+        // Carry every custom type (placed or not) so names and unplaced pieces travel.
+        let custom_types = self
+            .types
+            .iter()
+            .filter(|t| !t.builtin)
+            .map(|t| ShareType { name: t.name.clone(), offsets: t.offsets.iter().copied().collect() })
+            .collect();
+        ShareConfig { version: share::VERSION, radius: self.radius, custom_types, pieces }
     }
 
     /// Rebuild the pieces (and radius) from a [`ShareConfig`], creating or reusing types.
     fn apply_share(&mut self, cfg: ShareConfig) {
         self.radius = cfg.radius;
+        // Bring in the author's custom types (including unplaced ones), keeping their
+        // names; dedupe against existing types by offset set.
+        for st in &cfg.custom_types {
+            let set: BTreeSet<(i32, i32)> = st.offsets.iter().copied().collect();
+            if !set.is_empty() && !self.types.iter().any(|t| t.offsets == set) {
+                self.types.push(PieceTypeEdit { name: st.name.clone(), offsets: set, builtin: false });
+            }
+        }
         let pieces: Vec<PieceEdit> = cfg
             .pieces
             .into_iter()
@@ -615,7 +643,12 @@ impl eframe::App for KnightsApp {
             .filter(|t| !t.builtin)
             .map(|t| StoredType { name: t.name.clone(), offsets: t.offsets.iter().copied().collect() })
             .collect();
-        let persisted = Persisted { custom_types, saved: self.saved.clone() };
+        let persisted = Persisted {
+            custom_types,
+            saved: self.saved.clone(),
+            session: Some(self.to_share()),
+            selected_type: self.selected_type,
+        };
         eframe::set_value(storage, eframe::APP_KEY, &persisted);
     }
 
@@ -735,21 +768,22 @@ fn download_bytes(bytes: &[u8], filename: &str) -> Result<(), eframe::wasm_bindg
 mod tests {
     use super::*;
 
-    /// A board with a built-in piece and a custom piece survives encode → decode →
-    /// apply: the built-in resolves by name, the custom piece's offsets ride along inline.
+    /// A board with a built-in piece, a placed custom piece, and an *unplaced* custom
+    /// type survives encode → decode → apply: built-ins resolve by name, placed custom
+    /// pieces keep their type name, and the unplaced custom type comes along too.
     #[test]
-    fn share_round_trip_preserves_board() {
+    fn share_round_trip_preserves_board_and_custom_types() {
+        let placed_offsets: BTreeSet<(i32, i32)> = [(2, 2), (-2, -2)].into_iter().collect();
+        let unplaced_offsets: BTreeSet<(i32, i32)> = [(3, 0), (-3, 0)].into_iter().collect();
+
         let mut a = KnightsApp::fresh();
-        a.types.push(PieceTypeEdit {
-            name: "custom".to_owned(),
-            offsets: [(2, 2), (-2, -2)].into_iter().collect(),
-            builtin: false,
-        });
-        let custom = a.types.len() - 1;
+        a.types.push(PieceTypeEdit { name: "placed".to_owned(), offsets: placed_offsets.clone(), builtin: false });
+        let placed = a.types.len() - 1;
+        a.types.push(PieceTypeEdit { name: "unplaced".to_owned(), offsets: unplaced_offsets.clone(), builtin: false });
         a.radius = 123;
         a.pieces = vec![
             PieceEdit { type_idx: 0, color: [1, 2, 3], direction: Direction::Up, handed: Handedness::Cw, label: "W".to_owned() },
-            PieceEdit { type_idx: custom, color: [9, 8, 7], direction: Direction::Left, handed: Handedness::Ccw, label: "C".to_owned() },
+            PieceEdit { type_idx: placed, color: [9, 8, 7], direction: Direction::Left, handed: Handedness::Ccw, label: "C".to_owned() },
         ];
 
         let code = share::encode(&a.to_share());
@@ -760,18 +794,24 @@ mod tests {
         assert_eq!(b.radius, 123);
         assert_eq!(b.pieces.len(), 2);
 
-        // First piece references a built-in by name (type 0 = wazir), resolved on the other side.
+        // Built-in piece resolves by name (type 0 = wazir).
         let t0 = &b.types[b.pieces[0].type_idx];
         assert!(t0.builtin);
         assert_eq!(t0.name, a.types[0].name);
-        assert_eq!(b.pieces[0].color, [1, 2, 3]);
         assert_eq!(b.pieces[0].direction, Direction::Up);
         assert_eq!(b.pieces[0].handed, Handedness::Cw);
 
-        // Second piece's custom offsets come back inline as a non-built-in type.
+        // Placed custom piece keeps its type name and offsets.
         let t1 = &b.types[b.pieces[1].type_idx];
         assert!(!t1.builtin);
-        assert_eq!(t1.offsets, [(2, 2), (-2, -2)].into_iter().collect::<BTreeSet<_>>());
+        assert_eq!(t1.name, "placed");
+        assert_eq!(t1.offsets, placed_offsets);
         assert_eq!(b.pieces[1].label, "C");
+
+        // The unplaced custom type travels along with its name.
+        assert!(b
+            .types
+            .iter()
+            .any(|t| !t.builtin && t.name == "unplaced" && t.offsets == unplaced_offsets));
     }
 }

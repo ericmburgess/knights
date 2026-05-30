@@ -41,11 +41,24 @@ pub struct SharePiece {
     pub label: String,
 }
 
+/// A custom (non-built-in) piece type carried in a share code: a name + its offsets.
+/// Lets a shared config bring along the author's custom pieces — including ones not
+/// placed on the board — with their names intact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShareType {
+    pub name: String,
+    pub offsets: Vec<(i32, i32)>,
+}
+
 /// The portable form of a board setup.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShareConfig {
     pub version: u8,
     pub radius: i32,
+    /// The author's custom piece types (placed or not). `serde(default)` keeps older
+    /// codes that predate this field decodable.
+    #[serde(default)]
+    pub custom_types: Vec<ShareType>,
     pub pieces: Vec<SharePiece>,
 }
 
@@ -106,6 +119,10 @@ mod tests {
         ShareConfig {
             version: VERSION,
             radius: 200,
+            custom_types: vec![ShareType {
+                name: "myleaper".into(),
+                offsets: vec![(2, 2), (-2, -2)],
+            }],
             pieces: vec![
                 SharePiece {
                     piece: PieceRef::Builtin("knight".into()),
@@ -159,5 +176,14 @@ mod tests {
         cfg.pieces[0].piece = PieceRef::Builtin("griffin".into());
         let code = encode(&cfg);
         assert!(matches!(decode(&code), Err(ShareError::UnknownPiece(n)) if n == "griffin"));
+    }
+
+    #[test]
+    fn decodes_codes_without_custom_types() {
+        // A v1 code that predates the `custom_types` field still decodes (serde default).
+        let code = B64.encode(br#"{"version":1,"radius":50,"pieces":[]}"#);
+        let cfg = decode(&code).unwrap();
+        assert!(cfg.custom_types.is_empty());
+        assert_eq!(cfg.radius, 50);
     }
 }
