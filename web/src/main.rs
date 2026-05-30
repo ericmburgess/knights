@@ -12,9 +12,31 @@ use eframe::egui;
 use knights_core::engine::{self, Board, EngineConfig, PieceSpec};
 use knights_core::piece::KindBuilder;
 use knights_core::raster;
+use knights_core::share::{self, PieceRef, ShareConfig, SharePiece};
 use knights_core::spiral::{Direction, Handedness};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use web_time::Instant;
+
+/// What we persist to browser localStorage (via eframe): the user's custom piece types
+/// (built-ins are code-defined) and their named saved configs.
+#[derive(Default, Serialize, Deserialize)]
+struct Persisted {
+    custom_types: Vec<StoredType>,
+    saved: Vec<SavedConfig>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct StoredType {
+    name: String,
+    offsets: Vec<(i32, i32)>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct SavedConfig {
+    name: String,
+    config: ShareConfig,
+}
 
 /// Colors auto-assigned to pieces as they're added, cycled in order.
 const AUTO_COLORS: [[u8; 3]; 8] = [
@@ -35,7 +57,7 @@ const GRID_R: i32 = 5;
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions::default();
-    eframe::run_native("knights", options, Box::new(|cc| Ok(Box::new(KnightsApp::new(cc)))))
+    eframe::run_native("knights", options, Box::new(|cc| Ok(Box::new(KnightsApp::new(cc, None)))))
 }
 
 /// Web entry: mounts on the `<canvas id="the_canvas_id">` in index.html.
@@ -52,8 +74,14 @@ fn main() {
             .expect("missing element id=the_canvas_id")
             .dyn_into::<web_sys::HtmlCanvasElement>()
             .expect("the_canvas_id is not a <canvas>");
+        // A "#<code>" fragment means we were opened from a share link — decode it.
+        let initial = web_sys::window()
+            .and_then(|w| w.location().hash().ok())
+            .map(|h| h.trim_start_matches('#').to_string())
+            .filter(|s| !s.is_empty())
+            .and_then(|code| knights_core::share::decode(&code).ok());
         let result = eframe::WebRunner::new()
-            .start(canvas, options, Box::new(|cc| Ok(Box::new(KnightsApp::new(cc)))))
+            .start(canvas, options, Box::new(move |cc| Ok(Box::new(KnightsApp::new(cc, initial)))))
             .await;
         if let Err(e) = result {
             log::error!("eframe failed to start: {e:?}");
@@ -90,16 +118,20 @@ struct KnightsApp {
     // Board view transform.
     zoom: f32,
     pan: egui::Vec2,
+    // Persistence + sharing.
+    saved: Vec<SavedConfig>,
+    save_name: String,
+    /// Last generated share link, shown for manual copy as a clipboard fallback.
+    share_link: String,
 }
 
 impl KnightsApp {
-    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        // The built-in fairy pieces are always present (read-only).
+    /// The base state: built-in piece types (read-only) and the canonical red/black setup.
+    fn fresh() -> Self {
         let types: Vec<PieceTypeEdit> = library_types()
             .into_iter()
             .map(|(name, offsets)| PieceTypeEdit { name: name.to_owned(), offsets, builtin: true })
             .collect();
-        // Open on the canonical red/black setup: both reference the built-in knight.
         let knight = types.iter().position(|t| t.name == "knight").unwrap_or(0);
         Self {
             selected_type: knight,
@@ -114,6 +146,96 @@ impl KnightsApp {
             status: "Edit pieces, then press Simulate.".to_owned(),
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
+            saved: Vec::new(),
+            save_name: String::new(),
+            share_link: String::new(),
+        }
+    }
+
+    /// Build the app: start fresh, restore persisted custom types + saved configs, then
+    /// (if a share link was opened) apply that config on top.
+    fn new(cc: &eframe::CreationContext<'_>, initial: Option<ShareConfig>) -> Self {
+        let mut app = Self::fresh();
+        if let Some(storage) = cc.storage {
+            if let Some(p) = eframe::get_value::<Persisted>(storage, eframe::APP_KEY) {
+                for st in p.custom_types {
+                    app.types.push(PieceTypeEdit {
+                        name: st.name,
+                        offsets: st.offsets.into_iter().collect(),
+                        builtin: false,
+                    });
+                }
+                app.saved = p.saved;
+            }
+        }
+        if let Some(cfg) = initial {
+            app.apply_share(cfg);
+            app.status = "Loaded a shared config — press Simulate.".to_owned();
+        }
+        app
+    }
+
+    /// Map the current editor state to a portable [`ShareConfig`].
+    fn to_share(&self) -> ShareConfig {
+        let pieces = self
+            .pieces
+            .iter()
+            .map(|p| {
+                let t = &self.types[p.type_idx];
+                let piece = if t.builtin {
+                    PieceRef::Builtin(t.name.clone())
+                } else {
+                    PieceRef::Inline(t.offsets.iter().copied().collect())
+                };
+                SharePiece {
+                    piece,
+                    color: p.color,
+                    direction: p.direction,
+                    orientation: p.handed,
+                    label: p.label.clone(),
+                }
+            })
+            .collect();
+        ShareConfig { version: share::VERSION, radius: self.radius, pieces }
+    }
+
+    /// Rebuild the pieces (and radius) from a [`ShareConfig`], creating or reusing types.
+    fn apply_share(&mut self, cfg: ShareConfig) {
+        self.radius = cfg.radius;
+        let pieces: Vec<PieceEdit> = cfg
+            .pieces
+            .into_iter()
+            .map(|sp| PieceEdit {
+                type_idx: self.ensure_type(&sp.piece),
+                color: sp.color,
+                direction: sp.direction,
+                handed: sp.orientation,
+                label: sp.label,
+            })
+            .collect();
+        if !pieces.is_empty() {
+            self.pieces = pieces;
+        }
+        self.selected_type = self.selected_type.min(self.types.len() - 1);
+    }
+
+    /// Resolve a shared piece reference to a type index, adding a custom type if needed.
+    fn ensure_type(&mut self, piece: &PieceRef) -> usize {
+        match piece {
+            // decode() guarantees the name exists; fall back to 0 only defensively.
+            PieceRef::Builtin(name) => {
+                self.types.iter().position(|t| t.builtin && &t.name == name).unwrap_or(0)
+            }
+            PieceRef::Inline(offsets) => {
+                let set: BTreeSet<(i32, i32)> = offsets.iter().copied().collect();
+                if let Some(i) = self.types.iter().position(|t| t.offsets == set) {
+                    i
+                } else {
+                    let n = self.types.iter().filter(|t| !t.builtin).count() + 1;
+                    self.types.push(PieceTypeEdit { name: format!("shared {n}"), offsets: set, builtin: false });
+                    self.types.len() - 1
+                }
+            }
         }
     }
 
@@ -399,6 +521,45 @@ impl KnightsApp {
                 self.pieces.remove(i);
             }
         }
+
+        ui.separator();
+        ui.heading("Saved configs");
+        ui.horizontal(|ui| {
+            ui.text_edit_singleline(&mut self.save_name);
+            if ui.button("Save current").clicked() {
+                let name = self.save_name.trim().to_string();
+                if !name.is_empty() {
+                    let config = self.to_share();
+                    self.saved.retain(|s| s.name != name); // overwrite same name
+                    self.saved.push(SavedConfig { name, config });
+                    self.save_name.clear();
+                }
+            }
+        });
+        let mut load_cfg: Option<ShareConfig> = None;
+        let mut delete: Option<usize> = None;
+        for (i, s) in self.saved.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(&s.name);
+                if ui.button("Load").clicked() {
+                    load_cfg = Some(s.config.clone());
+                }
+                if ui.button("🗑").clicked() {
+                    delete = Some(i);
+                }
+            });
+        }
+        if let Some(cfg) = load_cfg {
+            self.apply_share(cfg);
+        }
+        if let Some(i) = delete {
+            self.saved.remove(i);
+        }
+        if !self.share_link.is_empty() {
+            ui.add_space(4.0);
+            ui.label("Last share link (also copied to clipboard):");
+            ui.text_edit_singleline(&mut self.share_link);
+        }
     }
 
     fn board_view(&mut self, ui: &mut egui::Ui) {
@@ -445,6 +606,19 @@ impl KnightsApp {
 }
 
 impl eframe::App for KnightsApp {
+    /// Persist custom piece types + named configs to localStorage (eframe autosaves
+    /// periodically and on close).
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        let custom_types = self
+            .types
+            .iter()
+            .filter(|t| !t.builtin)
+            .map(|t| StoredType { name: t.name.clone(), offsets: t.offsets.iter().copied().collect() })
+            .collect();
+        let persisted = Persisted { custom_types, saved: self.saved.clone() };
+        eframe::set_value(storage, eframe::APP_KEY, &persisted);
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::TopBottomPanel::top("controls").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -474,6 +648,13 @@ impl eframe::App for KnightsApp {
                 if ui.button("Reset view").clicked() {
                     self.zoom = 1.0;
                     self.pan = egui::Vec2::ZERO;
+                }
+                ui.separator();
+                if ui.button("Copy link").on_hover_text("Copy a shareable link to this config").clicked() {
+                    let code = share::encode(&self.to_share());
+                    self.share_link = share_link(&code);
+                    ui.output_mut(|o| o.copied_text = self.share_link.clone());
+                    self.status = format!("Share link copied ({} chars).", self.share_link.len());
                 }
             });
             ui.label(&self.status);
@@ -511,6 +692,21 @@ fn hand_name(h: Handedness) -> &'static str {
     }
 }
 
+/// Build a shareable link from a base64url config code: a `…/#<code>` URL on the web
+/// (opening it reloads the board), or just `#<code>` natively where there's no URL.
+#[cfg(target_arch = "wasm32")]
+fn share_link(code: &str) -> String {
+    let loc = web_sys::window().expect("window").location();
+    let origin = loc.origin().unwrap_or_default();
+    let path = loc.pathname().unwrap_or_default();
+    format!("{origin}{path}#{code}")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn share_link(code: &str) -> String {
+    format!("#{code}")
+}
+
 /// Trigger a browser download of `bytes` as `filename`.
 #[cfg(target_arch = "wasm32")]
 fn download_bytes(bytes: &[u8], filename: &str) -> Result<(), eframe::wasm_bindgen::JsValue> {
@@ -533,4 +729,49 @@ fn download_bytes(bytes: &[u8], filename: &str) -> Result<(), eframe::wasm_bindg
     anchor.click();
     web_sys::Url::revoke_object_url(&url)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A board with a built-in piece and a custom piece survives encode → decode →
+    /// apply: the built-in resolves by name, the custom piece's offsets ride along inline.
+    #[test]
+    fn share_round_trip_preserves_board() {
+        let mut a = KnightsApp::fresh();
+        a.types.push(PieceTypeEdit {
+            name: "custom".to_owned(),
+            offsets: [(2, 2), (-2, -2)].into_iter().collect(),
+            builtin: false,
+        });
+        let custom = a.types.len() - 1;
+        a.radius = 123;
+        a.pieces = vec![
+            PieceEdit { type_idx: 0, color: [1, 2, 3], direction: Direction::Up, handed: Handedness::Cw, label: "W".to_owned() },
+            PieceEdit { type_idx: custom, color: [9, 8, 7], direction: Direction::Left, handed: Handedness::Ccw, label: "C".to_owned() },
+        ];
+
+        let code = share::encode(&a.to_share());
+        let cfg = share::decode(&code).expect("valid code");
+
+        let mut b = KnightsApp::fresh();
+        b.apply_share(cfg);
+        assert_eq!(b.radius, 123);
+        assert_eq!(b.pieces.len(), 2);
+
+        // First piece references a built-in by name (type 0 = wazir), resolved on the other side.
+        let t0 = &b.types[b.pieces[0].type_idx];
+        assert!(t0.builtin);
+        assert_eq!(t0.name, a.types[0].name);
+        assert_eq!(b.pieces[0].color, [1, 2, 3]);
+        assert_eq!(b.pieces[0].direction, Direction::Up);
+        assert_eq!(b.pieces[0].handed, Handedness::Cw);
+
+        // Second piece's custom offsets come back inline as a non-built-in type.
+        let t1 = &b.types[b.pieces[1].type_idx];
+        assert!(!t1.builtin);
+        assert_eq!(t1.offsets, [(2, 2), (-2, -2)].into_iter().collect::<BTreeSet<_>>());
+        assert_eq!(b.pieces[1].label, "C");
+    }
 }

@@ -22,7 +22,8 @@ use std::collections::HashMap;
 /// The direction a spiral's first arm travels (its overall orientation, since the
 /// rest of the arms follow from this and the [`Handedness`]). Indices 0..=3 match the
 /// `dir` cycle right, up, left, down.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Direction {
     Right,
     Up,
@@ -44,7 +45,8 @@ impl Direction {
 
 /// Which way the spiral turns at each arm: counterclockwise (right→up→left→down) or
 /// clockwise (right→down→left→up).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Handedness {
     Ccw,
     Cw,
