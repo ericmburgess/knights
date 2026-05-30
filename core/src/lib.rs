@@ -12,4 +12,5 @@ pub mod knight;
 pub mod piece;
 pub mod raster;
 pub mod redblack;
+pub mod share;
 pub mod spiral;
